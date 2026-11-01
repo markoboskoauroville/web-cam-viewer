@@ -13,3 +13,5 @@
 **1.11.2026 (v2):** Marko: *"in the repository itself, we need to put Cloudflare secrets. Look how this is done, and open the page for me, please"*
 
 **1.11.2026 (v2):** Marko: *"build worker to update web page automatically. Cloudflare is set now"*
+
+**1.11.2026 (v3):** Marko: *"for 2 meters, I need actually two hairlines, hairline size 2 meters, for the left and right channels, please"*
