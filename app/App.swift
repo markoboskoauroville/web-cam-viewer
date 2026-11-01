@@ -1,4 +1,4 @@
-// Web Cam Viewer (Mantra): the picture of any camera the Mac sees, and nothing else.
+// Webcam Recorder (Mantra), until v1 Web Cam Viewer (Mantra): the picture of any camera the Mac sees, and nothing else.
 //
 // v1, Marko, 1.11.2026: "Web Cam Viewer is a simple client for macOS, of course in Swift, which simply shows anything
 // that can be viewed on any webcam. It just displays the picture. It has only a drop-down menu at the top, an X for
@@ -13,7 +13,7 @@ import AppKit
 import AVFoundation
 
 let VERSION = 2
-let NAME = "Web Cam Viewer (Mantra)"
+let NAME = "Webcam Recorder (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {
     var viewer: Viewer!

@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")"
 V=$(sed -n 's/^let VERSION = \([0-9]*\)/\1/p' app/App.swift)
-NAME="Web Cam Viewer (Mantra)"
+NAME="Webcam Recorder (Mantra)"
 BID=community.auroville.webcamviewer
 APP="build/$NAME.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -25,9 +25,9 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleVersion</key><string>$V</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSCameraUsageDescription</key><string>Web Cam Viewer shows the picture of the camera you choose.</string>
+<key>NSCameraUsageDescription</key><string>Webcam Recorder shows the picture of the camera you choose.</string>
 <key>NSCameraUseContinuityCameraDeviceType</key><true/>
-<key>NSMicrophoneUsageDescription</key><string>Web Cam Viewer shows the level of the sound input and records it with the picture.</string>
+<key>NSMicrophoneUsageDescription</key><string>Webcam Recorder shows the level of the sound input and records it with the picture.</string>
 </dict></plist>
 PL
 swift icon/make_icon.swift "$V" icon/icon_1024.png

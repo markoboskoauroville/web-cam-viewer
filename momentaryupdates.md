@@ -9,3 +9,5 @@
 **1.11.2026 (v2, during the build):** Marko: *"now, also add the full-screen button in the system of any of my apps. In the upper right corner, there will be this rectangle, which looks like full screen with gaps between. When I'm in full screen, it's a totally clean view. There is nothing except the image. If I want to go back, I press the Escape shortcut key. The shortcut key for full screen is Command-F, and Escape is going back"*
 
 **1.11.2026 (v2, during the build):** Marko: *"in this app, we can also publish in domain. We can call it Webcam Recorder (Mantra)"*
+
+**1.11.2026 (v2):** Marko: *"in the repository itself, we need to put Cloudflare secrets. Look how this is done, and open the page for me, please"*
