@@ -82,11 +82,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sonyBar.rec.target = self; sonyBar.rec.action = #selector(sonyRec)
         sonyBar.focus.target = self; sonyBar.focus.action = #selector(sonyFocus)
         sony.log = { NSLog("Sony: %@", $0) }
-        sony.onConnected = { [weak self] on in
-            guard let self else { return }
-            self.sonyBar.isHidden = !on
-            self.sonyBar.name.stringValue = self.sony.state.model
-        }
+        sony.onConnected = { [weak self] on in self?.updateSonyBar() }
         sony.onChange = { [weak self] st in
             guard let self else { return }
             self.sonyBar.setRecording(st.recording)
@@ -100,6 +96,22 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sony.start()
         let click = NSClickGestureRecognizer(target: self, action: #selector(pictureClicked(_:)))
         picture.addGestureRecognizer(click)
+    }
+
+    /// the group shows while a Sony is reachable: green-able over PTP (Remote Shoot), all grey while the chosen picture is
+    /// the Sony itself streaming over USB (nothing can be controlled then)
+    func updateSonyBar() {
+        let streamingSony = current.map { $0.localizedName.uppercased().hasPrefix("ILCE") || $0.manufacturer.uppercased().contains("SONY") } ?? false
+        if sony.ready {
+            sonyBar.isHidden = false
+            sonyBar.setControllable(true, name: sony.state.model)
+            sony.onChange?(sony.state)
+        } else if streamingSony, let c = current {
+            sonyBar.isHidden = false
+            sonyBar.setControllable(false, name: c.localizedName)
+        } else {
+            sonyBar.isHidden = true
+        }
     }
 
     @objc private func sonyRec() { sony.toggleRecord() }
@@ -433,6 +445,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func select(_ device: AVCaptureDevice?) {
         if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
+        updateSonyBar()
         guard let device else {
             queue.async { if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil } }
             say("No camera is connected.")

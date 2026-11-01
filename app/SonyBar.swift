@@ -56,8 +56,29 @@ final class SonyBar: NSStackView {
         b.attributedTitle = NSAttributedString(string: b.title, attributes: [.font: font, .foregroundColor: c])
     }
 
-    func setRecording(_ on: Bool) { Self.paint(rec, on ? Self.red : Self.grey) }
-    func setFocused(_ on: Bool) { Self.paint(focus, on ? Self.green : Self.white) }
+    /// v4, Marko, 1.11.2026: "whatever we can control can be green, what we cannot control can be grey out". The Sony is
+    /// the picture over USB Streaming: nothing can be controlled (no UVC controls, PTP and Wi-Fi / Bluetooth off while it
+    /// streams, Help Guide p.416), so everything is grey and the keys take no press; only the name is white.
+    private(set) var controllable = true
+    func setControllable(_ on: Bool, name model: String) {
+        controllable = on
+        rec.isEnabled = on; focus.isEnabled = on
+        name.stringValue = model
+        if !on {
+            Self.paint(rec, Self.dim); Self.paint(focus, Self.dim)
+            battery.stringValue = "BAT —"; aperture.stringValue = "F—"; shutter.stringValue = "—"; iso.stringValue = "ISO —"
+            for l in [battery, aperture, shutter, iso] { l.textColor = Self.dim }
+            let why = "Not controllable while the Sony streams over USB. Control needs USB Cnct Mode = Remote Shoot (picture over HDMI)."
+            for v in [rec, focus, battery, aperture, shutter, iso] as [NSView] { v.toolTip = why }
+        } else {
+            for l in [aperture, shutter, iso] { l.textColor = Self.white }
+            setRecording(false); setFocused(false); setBattery(nil)
+        }
+    }
+    static let dim = NSColor(white: 0.45, alpha: 1)
+
+    func setRecording(_ on: Bool) { guard controllable else { return }; Self.paint(rec, on ? Self.red : Self.grey) }
+    func setFocused(_ on: Bool) { guard controllable else { return }; Self.paint(focus, on ? Self.green : Self.white) }
     func setBattery(_ percent: Int?) {
         battery.stringValue = percent.map { "BAT \($0)%" } ?? "BAT —"
         battery.textColor = (percent ?? 100) <= 20 ? Self.amber : Self.white

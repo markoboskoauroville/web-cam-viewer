@@ -18,3 +18,7 @@
    moment the key was pressed, is the time code's start.
 8. **Set the camera to a whole frame rate** (lockForConfiguration, min = max duration 1/30) so the frame-counting time
    code does not drift from the clock.
+9. **The α7 V cannot stream and be controlled at once (1.11.2026).** USB Streaming offers UVC video + audio only, and its
+   UVC Camera Terminal and Processing Unit control bitmaps are both 0 (read from the descriptor with libusb): no exposure,
+   focus or zoom over UVC. PTP needs USB Cnct Mode = Remote Shoot/Trn., and the Help Guide p.416 switches off Wi-Fi remote
+   and Bluetooth while streaming. Full picture + control = HDMI capture for the picture, USB Remote Shoot for control.
