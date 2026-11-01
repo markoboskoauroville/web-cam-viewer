@@ -41,3 +41,5 @@ Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no sta
 **1.11.2026:** Marko: *"The streaming size can be configured inside the application. Inside the camera actually. Let me know how in camera I can adjust streaming. Let me know where in menu is that. What quality is it?"*
 
 **1.11.2026 (v4):** Marko: *"In the full screen, please show me VU meter. And both VU meters, full screen, not full screen, should be hairline on the left side without any gap between two VU meters, left and right. Also in the full screen, you need to show me recording, running recording time. So these two things are staying in full screen."*
+
+**Status at closing (1.11.2026):** all requests above are built and released up to v4, except: the Sony controls are greyed while the camera streams (cannot be controlled over USB Streaming; tested when the HDMI capture card arrives), and the one-cable mode switcher was offered, not built.

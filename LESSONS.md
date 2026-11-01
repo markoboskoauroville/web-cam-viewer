@@ -1,4 +1,4 @@
-# LESSONS: Web Cam Viewer (Mantra)
+# LESSONS: Webcam Recorder (Mantra)
 
 1. **The camera list has no fixed order inside an app (1.11.2026).** `AVCaptureDevice.DiscoverySession(...).devices`
    came back FaceTime first from the terminal but NDI first in the app, so the window opened on a black virtual camera.
@@ -22,3 +22,14 @@
    UVC Camera Terminal and Processing Unit control bitmaps are both 0 (read from the descriptor with libusb): no exposure,
    focus or zoom over UVC. PTP needs USB Cnct Mode = Remote Shoot/Trn., and the Help Guide p.416 switches off Wi-Fi remote
    and Bluetooth while streaming. Full picture + control = HDMI capture for the picture, USB Remote Shoot for control.
+10. **Two capture sessions on one camera = a black picture (1.11.2026).** The keeper that held the Sony in Output and the
+    picture's session both opened it; the picture got no frames. The keeper must release (and its queue drain) before the
+    picture opens the device, and a watchdog must reopen a camera that goes silent.
+11. **USB Streaming has no start key.** Standby until an app on the computer opens the camera, Output while one does, ends
+    only on unplugging (Help Guide p.415). The Mac can only request MSC mode (0xF012), so it cannot switch the camera into
+    streaming. Holding the device open is the only "keep streaming".
+12. **A build script must not trust stale binaries.** build.sh lipo'd old per-arch files after a failed compile and said
+    "built"; delete them first and check both exist.
+13. **macOS has no `AVCaptureSession.Preset.inputPriority`** and no ICDeviceBrowser `controlAuthorization`: use
+    hd1920x1080 when `canSetSessionPreset`, and skip the authorization call.
+14. **The streaming resolution is set in the camera**, not by the app: the α7 V at HD(720p) 25p offers only 1280×720 MJPEG.
