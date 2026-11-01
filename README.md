@@ -6,7 +6,9 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
 
 - **The picture** fills the whole window, never cropped. Over its top edge a half see-through bar: camera menu · sound
   menu · ● record, in the top middle; the full-screen key (four corners) and ✕ at the top right.
-- **The VU** of Mantra Manual Camera down the left edge: dB from −54, −6 and −18 marked, green / amber / red, white peak.
+- **Two VU hairlines** down the left edge, left and right channel side by side (v3), the meter of Mantra Manual Camera:
+  dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
+- **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.
 - **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mov`: H.265 1920×1080 10 Mb/s, AAC 48 kHz, a QuickTime time code track =
   the real-time clock of the first frame (MANTRA_MANIFEST modules/timecode.md); `REC  HH:MM:SS:FF` bottom middle while it
   records. One-second fragments, so a crash loses a second.
@@ -34,4 +36,5 @@ Cloudflare Pages. Repository secrets: `CLOUDFLARE_API_TOKEN` (Marko pasted it), 
                                         # a test start on the MacBook Pro screen, without taking focus
     open -n -g "/Applications/Webcam Recorder (Mantra).app" --args --selftest /path/report.txt
                                         # every camera 3 s (frames, frame difference), then a 6-second take; quits
+    ... --args --quiet --hover-rec      # the record key drawn as if the mouse were over it (for a screenshot)
     ffprobe the take: hevc 1920x1080, aac, a tmcd stream with tag:timecode = the wall clock of the first frame

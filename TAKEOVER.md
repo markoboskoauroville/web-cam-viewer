@@ -12,6 +12,10 @@ deleted afterwards. Window screenshot: both menus and ● centred, corners key a
 (0.6 MB DMG) → Site action success → https://mantrawebcamrecorder.pages.dev answers, the DMG 200, "↓ 0 downloads" shows;
 card 21 / SNIMANJE in the bio's Kod tab, HR and EN.
 
+**v3 (1.11.2026):** two VU hairlines, L and R, side by side on the left edge (per-channel RMS, interleaved or not); the
+record key shows a see-through red (35 %) under the mouse. Checked by screenshot (`--hover-rec`) and pixels across the
+meters (two 3-px greens, a gap). Released v3; the Site action puts it on the page.
+
 **Not yet seen by Marko:** full screen (⌘F / Escape) and a take of his own with REC and the time code on screen.
 
 **Code:** `app/App.swift` (start, flags, ⌘Q menu), `app/Viewer.swift` (window, bar, menus, session with video and audio

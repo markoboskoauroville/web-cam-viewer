@@ -15,3 +15,5 @@
 **1.11.2026 (v2):** Marko: *"build worker to update web page automatically. Cloudflare is set now"*
 
 **1.11.2026 (v3):** Marko: *"for 2 meters, I need actually two hairlines, hairline size 2 meters, for the left and right channels, please"*
+
+**1.11.2026 (v3, during the build):** Marko: *"please, hovering over the record button puts the red in the middle, but not full red. Just a little bit of transparent red, so I know if I press it, it will become full and start recording"*

@@ -34,7 +34,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var overlays: [NSView] = []
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
-    private let meter = Meter()
+    private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
     private var devices: [AVCaptureDevice] = []
     private var mics: [AVCaptureDevice] = []
@@ -173,7 +173,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         message.maximumNumberOfLines = 0
         content.addSubview(message)
 
-        // the meter: a hairline down the left edge, under the bar
+        // the meters: two hairlines (L, R) down the left edge, under the bar
         meter.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(meter)
 
@@ -231,7 +231,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             meter.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             meter.topAnchor.constraint(equalTo: bar.bottomAnchor),
             meter.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            meter.widthAnchor.constraint(equalToConstant: 6),
+            meter.widthAnchor.constraint(equalToConstant: StereoMeter.width),
 
             timecode.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             timecode.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
@@ -263,6 +263,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     func show() {
         if test { window.orderFrontRegardless() }     // a test never takes Marko's focus
+        if CommandLine.arguments.contains("--hover-rec") { recKey.hovering = true }   // the hover drawn without his mouse
         else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
         layoutPreview()
     }
@@ -503,7 +504,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
             recorder?.appendAudio(sb)
             let rms = Meter.rms(sb)
-            DispatchQueue.main.async { self.meter.setLevel(rms) }
+            DispatchQueue.main.async { self.meter.setLevels(rms) }
         } else {
             recorder?.appendVideo(sb)
             if selftesting { selftestFrame(sb) }
