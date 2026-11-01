@@ -14,7 +14,7 @@ import AVFoundation
 
 // v3: two VU hairlines, left and right channel, side by side on the left edge; the record key shows a see-through
 // red under the mouse.
-let VERSION = 3
+let VERSION = 4
 let NAME = "Webcam Recorder (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {
@@ -52,6 +52,10 @@ enum Main {
         if a.contains("--list") {
             for d in Cameras.all() { print("\(d.localizedName)\t\(d.deviceType.rawValue)\t\(d.uniqueID)") }
             exit(0)
+        }
+        if let i = a.firstIndex(of: "--sony-probe"), i + 1 < a.count {
+            _ = NSApplication.shared; NSApp.setActivationPolicy(.prohibited)
+            SonyProbe.run(a[i + 1]); NSApp.run(); exit(0)
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)

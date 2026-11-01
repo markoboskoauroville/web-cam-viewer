@@ -29,6 +29,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
+    let sonyBar = SonyBar()
+    let sony = SonyCamera()
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
@@ -71,6 +73,47 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureDevice.wasDisconnectedNotification, object: nil)
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
+        startSony()
+    }
+
+    // MARK: the Sony (v4): the group in the bar while it is connected, a click on the picture a touch on its screen
+
+    private func startSony() {
+        sonyBar.rec.target = self; sonyBar.rec.action = #selector(sonyRec)
+        sonyBar.focus.target = self; sonyBar.focus.action = #selector(sonyFocus)
+        sony.log = { NSLog("Sony: %@", $0) }
+        sony.onConnected = { [weak self] on in
+            guard let self else { return }
+            self.sonyBar.isHidden = !on
+            self.sonyBar.name.stringValue = self.sony.state.model
+        }
+        sony.onChange = { [weak self] st in
+            guard let self else { return }
+            self.sonyBar.setRecording(st.recording)
+            self.sonyBar.setFocused(st.focused)
+            self.sonyBar.setBattery(st.battery)
+            self.sonyBar.aperture.stringValue = SonyCamera.fText(st.fnumber)
+            self.sonyBar.shutter.stringValue = SonyCamera.shutterText(st.shutter)
+            self.sonyBar.iso.stringValue = SonyCamera.isoText(st.iso)
+            self.sonyBar.name.stringValue = st.model
+        }
+        sony.start()
+        let click = NSClickGestureRecognizer(target: self, action: #selector(pictureClicked(_:)))
+        picture.addGestureRecognizer(click)
+    }
+
+    @objc private func sonyRec() { sony.toggleRecord() }
+    @objc private func sonyFocus() { sony.focus() }
+
+    @objc private func pictureClicked(_ g: NSClickGestureRecognizer) {
+        guard sony.ready else { return }
+        let p = g.location(in: picture)
+        // the view's point in the preview layer's own coordinates, then the picture's 0…1, top-left origin
+        // (the letterbox bands fall outside 0…1 and do nothing)
+        let lp = picture.layer.map { $0.convert(p, to: preview) } ?? p
+        let d = preview.captureDevicePointConverted(fromLayerPoint: lp)
+        guard (0...1).contains(d.x), (0...1).contains(d.y) else { return }
+        sony.touch(nx: d.x, ny: d.y)
     }
 
     // MARK: the window
@@ -103,12 +146,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         bar.translatesAutoresizingMaskIntoConstraints = false
 
         for (p, id, tip) in [(popup, "camera", "The camera"), (micPopup, "sound", "The sound input")] {
+            p.cell = ShortPopUpCell(textCell: "", pullsDown: false)   // eight characters of the name (v4)
             p.target = self
             p.controlSize = .regular
             p.setAccessibilityIdentifier(id)
             p.toolTip = tip
             p.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            p.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+            p.widthAnchor.constraint(equalToConstant: 104).isActive = true
         }
         popup.action = #selector(picked)
         micPopup.action = #selector(pickedMic)
@@ -122,7 +166,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
-        let group = NSStackView(views: [popup, micPopup, recKey])
+        sonyBar.isHidden = true   // only while a Sony is connected
+        let group = NSStackView(views: [popup, micPopup, recKey, sonyBar])
+        group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
         group.translatesAutoresizingMaskIntoConstraints = false
@@ -205,9 +251,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             bar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             bar.heightAnchor.constraint(equalToConstant: Self.barHeight),
 
-            group.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
+            // v4: the menus to the left, the Sony after them (Marko: "push camera choice and microphone choice to the left side")
+            group.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
             group.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            group.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: 10),
             group.trailingAnchor.constraint(lessThanOrEqualTo: permissions.leadingAnchor, constant: -10),
 
             closeButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -6),

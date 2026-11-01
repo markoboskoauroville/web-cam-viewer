@@ -23,3 +23,5 @@
 **1.11.2026 (v4):** Marko: *"also, while Sony is connected, if I click with the mouse, it's like a touch on the Sony screen. It will focus on that pixel inside my camera"*
 
 **1.11.2026 (v4):** Marko: *"and you do this automatically without any user interface. When the camera is connected to the computer, its time code gets jammed to the local clock"*
+
+**1.11.2026 (v4, his answer on the picture):** Marko: *"Since. I didn't know that cable will stop control. That means we need to find a way how to utilize its Wi-Fi for streaming and get picture through Wi-Fi. So we can connect directly to Wi-Fi on this camera or camera can control to my home network and then stream to home network and we can use USB only for controlling, understand only for controlling or vice versa, we can use Wi-Fi for controlling and USB for streaming or even we can use Bluetooth for controlling. So we have three connections. You let me know how to keep USB cable on the phone. I think that's the best speed for streaming and take control over Wi-Fi or Bluetooth."*
