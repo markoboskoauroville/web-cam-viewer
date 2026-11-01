@@ -5,11 +5,14 @@
 // closing, and at the top I just choose any webcam the system sees, and you show me the picture. Very simple"
 //
 // So: one window, a bar at the top with the camera menu on the left and ✕ on the right (✕ quits, the camera light goes
-// off), the picture under it, whole, never cropped. PERMISSIONS (amber) appears beside ✕ only while the camera is refused.
+// off), the picture under it, whole, never cropped.
+// v2, the same day: a sound input menu beside the camera, the VU hairline of Mantra Manual Camera on the left edge, a
+// record key (~/Movies/mb_<date>_<time>.mov, H.265 1080p 10 Mb/s, AAC, a time code track = the real-time clock, shown
+// REC HH:MM:SS:FF bottom middle while recording), and full screen: the corners key, ⌘F in, Escape out, only the picture. PERMISSIONS (amber) appears beside ✕ only while the camera is refused.
 import AppKit
 import AVFoundation
 
-let VERSION = 1
+let VERSION = 2
 let NAME = "Web Cam Viewer (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {

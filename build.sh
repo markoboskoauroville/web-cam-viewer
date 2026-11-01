@@ -27,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Web Cam Viewer shows the picture of the camera you choose.</string>
 <key>NSCameraUseContinuityCameraDeviceType</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Web Cam Viewer shows the level of the sound input and records it with the picture.</string>
 </dict></plist>
 PL
 swift icon/make_icon.swift "$V" icon/icon_1024.png

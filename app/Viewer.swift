@@ -30,6 +30,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
     private let closeButton = NSButton()
+    private let fullKey = FullKey()
+    private var overlays: [NSView] = []
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
     private let meter = Meter()
@@ -146,6 +148,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         closeButton.toolTip = "Close"
         bar.addSubview(closeButton)
 
+        // full screen: only the picture; ⌘F in, Escape out (Marko, 1.11.2026)
+        fullKey.translatesAutoresizingMaskIntoConstraints = false
+        fullKey.isBordered = false; fullKey.title = ""
+        fullKey.target = self; fullKey.action = #selector(toggleFull)
+        fullKey.setAccessibilityIdentifier("full")
+        fullKey.setAccessibilityLabel("Full screen")
+        fullKey.toolTip = "Full screen (⌘F), Escape goes back"
+        bar.addSubview(fullKey)
+
         picture.translatesAutoresizingMaskIntoConstraints = false
         picture.wantsLayer = true
         picture.layer?.backgroundColor = NSColor.black.cgColor
@@ -175,6 +186,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         content.addSubview(timecode)
 
         content.addSubview(bar)   // last: over the picture
+        overlays = [bar, meter]
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(enteredFull), name: NSWindow.willEnterFullScreenNotification, object: window)
+        nc.addObserver(self, selector: #selector(leftFull), name: NSWindow.didExitFullScreenNotification, object: window)
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, e.window === self.window else { return e }
+            let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
+            if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if e.keyCode == 53, self.isFull { self.toggleFull(); return nil }   // Escape
+            return e
+        }
 
         NSLayoutConstraint.activate([
             bar.topAnchor.constraint(equalTo: content.topAnchor),
@@ -192,7 +215,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             closeButton.widthAnchor.constraint(equalToConstant: 30),
             closeButton.heightAnchor.constraint(equalToConstant: 30),
 
-            permissions.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            fullKey.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+            fullKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            fullKey.widthAnchor.constraint(equalToConstant: 30),
+            fullKey.heightAnchor.constraint(equalToConstant: 30),
+
+            permissions.trailingAnchor.constraint(equalTo: fullKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             picture.topAnchor.constraint(equalTo: content.topAnchor),
@@ -240,6 +268,20 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     @objc private func closeTapped() { NSApp.terminate(nil) }
+
+    // MARK: full screen: the picture and nothing else
+
+    private var isFull: Bool { window.styleMask.contains(.fullScreen) }
+    @objc private func toggleFull() { window.toggleFullScreen(nil) }
+    @objc private func enteredFull() {
+        overlays.forEach { $0.isHidden = true }
+        timecode.alphaValue = 0
+        NSCursor.setHiddenUntilMouseMoves(true)
+    }
+    @objc private func leftFull() {
+        overlays.forEach { $0.isHidden = false }
+        timecode.alphaValue = 1
+    }
 
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
