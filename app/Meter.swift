@@ -88,7 +88,7 @@ final class RecordKey: NSButton {
 // corners of a rectangle, the middle of each side left open. Grey like ✕.
 final class FullKey: NSButton {
     override func draw(_ r: NSRect) {
-        let w: CGFloat = 18, h: CGFloat = 13, arm: CGFloat = 5.5
+        let w: CGFloat = 19, h: CGFloat = 15, arm: CGFloat = 4.5
         let f = NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
         let p = NSBezierPath()
         for (x, y, dx, dy) in [(f.minX, f.minY, 1.0, 1.0), (f.maxX, f.minY, -1.0, 1.0), (f.minX, f.maxY, 1.0, -1.0), (f.maxX, f.maxY, -1.0, -1.0)] {

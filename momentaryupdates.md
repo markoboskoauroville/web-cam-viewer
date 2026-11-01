@@ -11,3 +11,5 @@
 **1.11.2026 (v2, during the build):** Marko: *"in this app, we can also publish in domain. We can call it Webcam Recorder (Mantra)"*
 
 **1.11.2026 (v2):** Marko: *"in the repository itself, we need to put Cloudflare secrets. Look how this is done, and open the page for me, please"*
+
+**1.11.2026 (v2):** Marko: *"build worker to update web page automatically. Cloudflare is set now"*

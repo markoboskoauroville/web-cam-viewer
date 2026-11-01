@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webcam Recorder (Mantra)</title>
+<meta name="description" content="A free webcam viewer and recorder for the Mac: any camera and sound input, a level meter, full screen, and one key that records H.265 1080p with time code from the real-time clock.">
+<meta property="og:title" content="Webcam Recorder (Mantra) for the Mac">
+<meta property="og:description" content="Any camera, any sound input, recorded with time code. Free.">
+<meta property="og:image" content="https://mantrawebcamrecorder.pages.dev/shot-window.png">
+<link rel="icon" href="icon-512.png">
+<style>
+  :root {
+    --ground: #15171a; --raised: #1f2328; --line: #2c323a; --text: #e8eaed; --dim: #9aa0a6;
+    --amber: #e8a64b; --amber-ink: #1a1408; --green: #34d399;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--text);
+         font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 56px 16px 40px; }
+  header { display: flex; gap: 20px; align-items: center; }
+  header img { width: 84px; height: 84px; flex: none; }
+  h1 { margin: 0; font-size: 40px; line-height: 1.1; letter-spacing: -0.5px; }
+  .by { color: var(--dim); font-size: 15px; margin-top: 4px; }
+  .lead { font-size: 21px; margin: 32px 0 8px; max-width: 760px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 32px; align-items: start; margin: 28px 0 40px; }
+  .shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #000; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .caption { color: var(--dim); font-size: 14px; margin: 8px 0 0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 18px 0 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 14px 22px; border-radius: 12px;
+         background: var(--amber); color: var(--amber-ink); font-weight: 700; text-decoration: none; font-size: 17px; }
+  .btn:hover { filter: brightness(1.06); }
+  .small { color: var(--dim); font-size: 14px; }
+  .quiet { color: var(--amber); text-decoration: none; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 44px; }
+  .card { background: var(--raised); border: 1px solid var(--line); border-radius: 16px; padding: 20px 20px 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--dim); font-size: 15px; }
+  h2 { font-size: 24px; margin: 0 0 14px; }
+  /* the page order (MANTRA_MANIFEST app-page-order.md): banner, introduction, lifestyle, technical, donation */
+  .banner { position: relative; border-radius: 18px; overflow: hidden; margin: 0 0 28px; background: #000; }
+  .banner > img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+  .banner .over { position: absolute; left: 0; right: 0; bottom: 0; padding: 60px 26px 22px;
+                  background: linear-gradient(transparent, rgba(0,0,0,.82)); display: flex; gap: 18px; align-items: center; }
+  .banner .over img { width: 64px; height: 64px; flex: none; }
+  .life { border-radius: 18px; overflow: hidden; margin: 8px 0 44px; }
+  .life img { display: block; width: 100%; height: auto; }
+  @media (max-width: 600px) { h1 { font-size: 28px; } .banner .over { position: static; background: var(--raised); padding: 16px; } }
+  ol { padding-left: 22px; margin: 0 0 44px; }
+  ol li { margin: 8px 0; }
+  code, pre { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; font-size: 15px; }
+  code { padding: 1px 6px; }
+  pre { padding: 16px 18px; overflow-x: auto; margin: 0 0 44px; line-height: 1.5; }
+  kbd { background: var(--raised); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-size: 14px; }
+  table { border-collapse: collapse; margin: 0 0 44px; width: 100%; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { white-space: nowrap; color: var(--amber); }
+  footer { border-top: 1px solid var(--line); padding-top: 18px; color: var(--dim); font-size: 14px;
+           display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+  footer a { color: var(--dim); }
+  @media (max-width: 760px) { .hero { grid-template-columns: 1fr; } .hero .shot { max-width: 360px; } }
+  @media (max-width: 560px) {
+    main { padding-top: 32px; } h1 { font-size: 30px; } header img { width: 64px; height: 64px; } .lead { font-size: 18px; }
+  }
+</style>
+<!-- SEO (MANTRA_MANIFEST kits/seo) -->
+<link rel="canonical" href="https://mantrawebcamrecorder.pages.dev/">
+<meta name="robots" content="index, follow">
+<meta name="keywords" content="webcam recorder mac, webcam viewer mac, record webcam h265, timecode recorder, multicam timecode, free webcam app mac">
+<meta name="author" content="Marko Bosko, Mantra Productions">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mantrawebcamrecorder.pages.dev/">
+<meta property="og:site_name" content="Mantra Productions">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Webcam Recorder (Mantra)">
+<meta name="twitter:description" content="A free webcam viewer and recorder for the Mac: any camera and sound input, a level meter, full screen, and one key that records H.265 1080p with time code from the real-time clock.">
+<meta name="twitter:image" content="https://mantrawebcamrecorder.pages.dev/shot-window.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Webcam Recorder (Mantra)", "url": "https://mantrawebcamrecorder.pages.dev/", "description": "A free webcam viewer and recorder for the Mac: any camera and sound input, a level meter, full screen, and one key that records H.265 1080p with time code from the real-time clock.", "applicationCategory": "MultimediaApplication", "operatingSystem": "macOS", "softwareVersion": "__VERSION__", "image": "https://mantrawebcamrecorder.pages.dev/shot-window.png", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "EUR"}, "author": {"@type": "Person", "name": "Marko Bosko", "url": "https://markobosko.pages.dev"}, "publisher": {"@type": "Organization", "name": "Mantra Productions"}, "potentialAction": {"@type": "DonateAction", "name": "Put something in the bowl", "target": "https://revolut.me/mbosko0612"}, "downloadUrl": "https://mantrawebcamrecorder.pages.dev/download/WebcamRecorder.dmg"}</script>
+<!-- /SEO -->
+</head>
+<body>
+<main>
+  <!-- 1. the banner: the app at work (a Nano Banana render of the app in use replaces this screenshot when made) -->
+  <div class="banner">
+    <img src="shot-window.png" alt="The Webcam Recorder window: a camera picture filling the window, the camera and microphone menus and the round record key in a half see-through bar at the top" width="1600" height="900">
+    <div class="over">
+      <img src="icon-512.png" alt="">
+      <div>
+        <h1>Webcam Recorder (Mantra)</h1>
+        <div class="by">Webcam viewer and recorder for the Mac · free · by Mantra Productions</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. the introduction -->
+  <p class="lead">The picture of any camera your Mac sees, filling the window. Choose the camera and the sound
+    input at the top, watch the level on the left edge, and press the round key to record. Every take carries the
+    time of day as time code, so it lines up with your other cameras in the edit.</p>
+  <div class="actions">
+    <a class="btn" href="download/WebcamRecorder.dmg" data-dl-app="webcamrecorder" download>Download for Mac</a>
+  </div>
+  <p class="small">Version <span id="app-version">__VERSION__</span> · macOS 14 or newer · Apple Silicon and Intel · <span id="app-size">__SIZE__</span></p>
+
+  <!-- 3. the lifestyle picture: a Nano Banana render goes here when made -->
+
+  <!-- 4. the technical part -->
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card"><h3>Any camera</h3><p>The built-in FaceTime camera, USB webcams and capture cards, your iPhone, and virtual cameras like OBS, NDI and Iriun. Plug one in and it appears in the menu.</p></div>
+    <div class="card"><h3>Any sound input</h3><p>Every microphone and audio interface the Mac sees, or no sound. A hairline meter on the left edge shows the level in dB, with a peak that holds.</p></div>
+    <div class="card"><h3>One key records</h3><p>The round key turns red and the take goes to <code>Movies/mb_date_time.mov</code>: H.265, 1920×1080, 10 Mb/s, AAC sound.</p></div>
+    <div class="card"><h3>Time code from the clock</h3><p>While it records, <code>REC 14:03:27:12</code> runs at the bottom. The file carries a real time code track starting at the time of day of its first frame, ready for multicam sync in DaVinci Resolve.</p></div>
+    <div class="card"><h3>Nothing but the picture</h3><p>The controls lie half see-through over the picture, so nothing is cropped. <kbd>⌘F</kbd> is full screen with only the image; <kbd>Esc</kbd> brings the controls back.</p></div>
+    <div class="card"><h3>Written to disk every second</h3><p>A take is saved in one-second pieces while it records, so a crash costs a second, not the recording.</p></div>
+  </div>
+
+  <h2>Install</h2>
+  <ol>
+    <li>Open the downloaded <code>WebcamRecorder.dmg</code> and drag <b>Webcam Recorder (Mantra)</b> onto <b>Applications</b>.</li>
+    <li>Open it. The first time, macOS says it cannot check the app: it is signed by its author, not through Apple's paid
+      program. Go to <b>System Settings › Privacy &amp; Security</b>, scroll down and press <b>Open Anyway</b>.</li>
+    <li>Allow the camera and the microphone when asked. If you said no, the amber <b>PERMISSIONS</b> at the top right opens the switch.</li>
+  </ol>
+
+<!-- 5. the donation bowl -->
+<!-- THE MANTRA PAYMENT GATEWAY, the donation bowl (MANTRA_MANIFEST modules/donation-bowl.md, payment-links.md).
+     Step 1, on the page: only the title and the Tibetan bowl (a photoreal Nano Banana Pro render).
+     Step 2, after a tap: the bowl rings (a singing bowl synthesised in the browser, nothing downloaded), fades away, and
+     the giving panel takes its place: a "Give with Revolut" button, his Revolut QR code, a way back to the bowl.
+     Paste this block into the page; put tibetan-bowl.jpg and revolut-qr.png in the page's img/ folder.
+     Self-contained: its own styles (scoped to .mantra-bowl) and script; no library, no tracking. -->
+<section class="mantra-bowl" data-revolut="https://revolut.me/mbosko0612" aria-label="Support Marko Mantra">
+  <style>
+    .mantra-bowl { --brass: #f3c97a; --glow: rgba(255, 196, 120, .45); --card: #292c2f; text-align: center; padding: 64px 16px; }
+    .mantra-bowl h2 { margin: 0 0 26px; }
+    .mantra-bowl .stage { position: relative; display: grid; place-items: center; min-height: 380px; aspect-ratio: auto; background: none; overflow: visible; border-radius: 0; }
+    .mantra-bowl .stage > * { grid-area: 1 / 1; transition: opacity .9s ease, transform .9s ease; }
+    .mantra-bowl .bowl { background: none; border: 0; padding: 0; cursor: pointer; position: relative; color: inherit; font: inherit; -webkit-tap-highlight-color: transparent; }
+    .mantra-bowl .bowl:focus-visible { outline: 2px solid var(--brass); outline-offset: 8px; border-radius: 24px; }
+    .mantra-bowl .bowl img { width: min(360px, 82vw); height: auto; display: block; border-radius: 24px; transition: transform .4s ease, filter .4s ease; }
+    .mantra-bowl .hint { display: block; margin-top: 16px; font-size: 15px; letter-spacing: .06em; opacity: .75; }
+    .mantra-bowl .bowl:hover img { transform: translateY(-3px); filter: brightness(1.08); }
+    .mantra-bowl .ring { position: absolute; left: 50%; top: 36%; width: 60%; aspect-ratio: 3 / 1; border: 2px solid var(--glow); border-radius: 50%;
+      transform: translate(-50%, -50%) scale(.6); opacity: 0; pointer-events: none; }
+    .mantra-bowl.ringing .ring { animation: mantra-bowl-ring 2.4s ease-out forwards; }
+    .mantra-bowl.ringing .ring.r2 { animation-delay: .5s; }
+    .mantra-bowl.ringing .ring.r3 { animation-delay: 1s; }
+    @keyframes mantra-bowl-ring { 0% { opacity: .9; transform: translate(-50%, -50%) scale(.6); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); } }
+    /* step 2: the bowl gives way to the panel */
+    .mantra-bowl.giving .bowl { opacity: 0; transform: scale(.94); pointer-events: none; }
+    .mantra-bowl .panel { opacity: 0; transform: translateY(14px); pointer-events: none; width: min(420px, 92vw); }
+    .mantra-bowl.giving .panel { opacity: 1; transform: none; pointer-events: auto; transition-delay: .35s; }
+    .mantra-bowl .give { display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 18px 22px; border-radius: 999px;
+      background: linear-gradient(90deg, #f3c97a, #fff0c4, #f3c97a); color: #1a1206; font-weight: 700; font-size: 17px; text-decoration: none;
+      box-shadow: 0 0 30px var(--glow); box-sizing: border-box; }
+    .mantra-bowl .qr { margin: 22px auto 0; background: var(--card); border-radius: 22px; padding: 22px; width: min(260px, 70vw); box-sizing: border-box; }
+    .mantra-bowl .qr img { width: 100%; height: auto; display: block; }
+    .mantra-bowl .small { font-size: 14px; opacity: .7; margin: 14px 0 0; }
+    .mantra-bowl .back { background: none; border: 0; color: inherit; opacity: .6; font-size: 14px; margin-top: 18px; cursor: pointer; text-decoration: underline; }
+    @media (prefers-reduced-motion: reduce) { .mantra-bowl.ringing .ring { animation: none; } .mantra-bowl .stage > * { transition: none; } }
+  </style>
+  <h2>Put something in the bowl</h2>
+  <div class="stage">
+    <button type="button" class="bowl" aria-label="Ring the bowl to give">
+      <span class="ring"></span><span class="ring r2"></span><span class="ring r3"></span>
+      <img src="img/tibetan-bowl.jpg" alt="A Tibetan singing bowl on a red cushion, coins inside" width="900" height="900">
+      <span class="hint">Click on the bowl to donate</span>
+    </button>
+    <div class="panel" aria-hidden="true">
+      <a class="give" href="https://revolut.me/mbosko0612" target="_blank" rel="noopener">Give with Revolut →</a>
+      <p class="small">Any amount, by card or Revolut. No Revolut account needed. It goes straight to Marko.</p>
+      <div class="qr"><img src="img/revolut-qr.png" alt="Revolut QR code for @mbosko0612" width="620" height="760"></div>
+      <p class="small">On a computer? Scan it with your phone.</p>
+      <button type="button" class="back">back to the bowl</button>
+    </div>
+  </div>
+  <script>
+  (() => {
+    const box = document.currentScript.closest('.mantra-bowl');
+    const bowl = box.querySelector('.bowl'), panel = box.querySelector('.panel');
+    box.querySelector('.give').href = box.dataset.revolut;
+    // A singing bowl's voice: a low fundamental with inharmonic partials (about 1, 2.76, 5.4, 8.9 times), each a pair a
+    // few tenths of a hertz apart so the tone beats, a soft strike and a long fading hum.
+    function ring() {
+      const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+      const ac = new Ctx(), now = ac.currentTime, out = ac.createGain();
+      out.gain.value = 0.32; out.connect(ac.destination);
+      [[1, 1, 9], [2.76, .5, 6], [5.4, .25, 4], [8.93, .12, 2.5]].forEach(([k, amp, dur]) => {
+        [0, 0.6].forEach(detune => {
+          const o = ac.createOscillator(), g = ac.createGain();
+          o.type = 'sine'; o.frequency.value = 196 * k + detune;
+          g.gain.setValueAtTime(0, now);
+          g.gain.linearRampToValueAtTime(amp / 2, now + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+          o.connect(g); g.connect(out); o.start(now); o.stop(now + dur + 0.1);
+        });
+      });
+      setTimeout(() => ac.close(), 10000);
+    }
+    bowl.addEventListener('click', () => {
+      ring();
+      box.classList.remove('ringing'); void box.offsetWidth; box.classList.add('ringing');
+      // the bowl sounds first, then gives way to the panel
+      setTimeout(() => { box.classList.add('giving'); panel.setAttribute('aria-hidden', 'false'); bowl.setAttribute('aria-hidden', 'true'); }, 1300);
+    });
+    box.querySelector('.back').addEventListener('click', () => {
+      box.classList.remove('giving', 'ringing'); panel.setAttribute('aria-hidden', 'true'); bowl.removeAttribute('aria-hidden');
+    });
+  })();
+  </script>
+</section>
+
+  <footer>
+    <span>© 2026 Mantra Productions · Marko Bosko · <a href="https://markobosko.pages.dev/#/kod">more software</a> · <a href="https://mantratimer.pages.dev">Timer Stopwatch Clock (Mantra)</a> · <a href="https://mantramacrorecorder.pages.dev">Macro Recorder (Mantra)</a></span>
+    <p data-visits-box hidden style="margin:0">Visits: <span data-visits="webcamrecorder"></span></p>
+  </footer>
+</main>
+<script src="https://mantra-downloads.marko-bosko-925.workers.dev/counter.js" defer></script>
+<script src="https://mantra-visits.marko-bosko-925.workers.dev/counter.js" defer></script>
+<script src="https://speechifykeys.pages.dev/speechify-keys.js" defer></script>
+</body>
+</html>

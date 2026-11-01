@@ -9,7 +9,11 @@ NAME="Webcam Recorder (Mantra)"
 BID=community.auroville.webcamviewer
 APP="build/$NAME.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -o "$APP/Contents/MacOS/WebCamViewer" app/*.swift 2>&1 | grep -v "warning:" || true
+# universal: Apple Silicon and Intel (the page offers it to everyone)
+for A in arm64 x86_64; do
+  swiftc -O -swift-version 5 -parse-as-library -target $A-apple-macosx14.0 -o build/WCR-$A app/*.swift 2>&1 | grep -v "warning:" || true
+done
+lipo -create build/WCR-arm64 build/WCR-x86_64 -output "$APP/Contents/MacOS/WebCamViewer"
 [ -x "$APP/Contents/MacOS/WebCamViewer" ] || { echo "the app did not build"; exit 1; }
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,4 +44,7 @@ iconutil -c icns $I -o "$APP/Contents/Resources/AppIcon.icns"
 codesign --force -s "Mantra Apps" "$APP"
 rm -rf "/Applications/$NAME.app"; cp -R "$APP" /Applications/
 echo "built $APP (v$V) and installed it in /Applications"
-[ "$1" = "--no-run" ] || swift tools/relaunch.swift $BID "/Applications/$NAME.app" || true
+[ "$1" = "--no-run" ] || [ "$1" = "--release" ] || swift tools/relaunch.swift $BID "/Applications/$NAME.app" || true
+# --release: the installer and the GitHub release v<N>; the Site action then puts it on https://mantrawebcamrecorder.pages.dev
+[ "$1" = "--release" ] && { sh tools/make_dmg.sh && sh tools/release.sh; }
+exit 0

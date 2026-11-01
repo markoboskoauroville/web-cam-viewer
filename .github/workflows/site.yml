@@ -1,0 +1,46 @@
+# Site: https://mantrawebcamrecorder.pages.dev on Cloudflare Pages. Runs when site/ changes, when a release is published
+# (./build.sh --release makes release v<N> with the DMG), or by hand. The newest release's DMG is put next to the page
+# under one fixed name (download/WebcamRecorder.dmg, MANTRA_MANIFEST modules/download-always-latest.md), and its tag is
+# the version written on the page. Secrets (repository settings): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+name: Site
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/site.yml]
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The newest release behind the fixed address (download/WebcamRecorder.dmg)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view --json tagName --jq .tagName)
+          V=${TAG#v}
+          echo "newest release: $TAG"
+          rm -rf rel site/public/download && mkdir -p rel site/public/download
+          gh release download "$TAG" --pattern '*.dmg' -D rel
+          [ "$(ls rel/*.dmg | wc -l)" = 1 ] || { echo "::error::$TAG needs one .dmg"; exit 1; }
+          cp rel/*.dmg site/public/download/WebcamRecorder.dmg
+          BYTES=$(stat -c %s site/public/download/WebcamRecorder.dmg)
+          [ "$BYTES" -le 26214400 ] || { echo "::error::the DMG is over Cloudflare Pages' 25 MB"; exit 1; }
+          MB=$(python3 -c "print(f'{$BYTES/1048576:.1f}')")
+          sed -i "s/__VERSION__/$V/g; s/__SIZE__/$MB MB/g" site/public/index.html
+          ! grep -n '__VERSION__\|__SIZE__' site/public/index.html
+      - name: The Pages project (made the first time, then it already exists)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@3 pages project create mantrawebcamrecorder --production-branch main || true
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site/public --project-name=mantrawebcamrecorder --branch=main --commit-dirty=true
