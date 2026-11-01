@@ -1,15 +1,22 @@
-# TAKEOVER: Web Cam Viewer (Mantra)
+# TAKEOVER: Webcam Recorder (Mantra)
 
-**1.11.2026, v1.** Built from Marko's request (momentaryupdates.md): a simple Swift client showing any webcam, a menu at
-the top, ✕ to close. During the build he asked for the bar to lie half see-through over the picture with the menu in the
-top middle, not taking any viewing area: done in v1.
+**1.11.2026, v2, released and published.** Renamed from Web Cam Viewer (Mantra) at Marko's word; bundle id kept.
+Requests word for word in momentaryupdates.md: the sound input and the VU, the record key (mb_ file, H.265 1080p 10 Mb/s),
+time code from the real-time clock (written into MANTRA_MANIFEST modules/timecode.md), the full-screen key with ⌘F and
+Escape, the page on the domain, the Cloudflare secrets in the repository and the worker that updates the page.
 
-**State:** installed, star row in Mac (STAR_SWIFT rows.json). Camera permission allowed by Marko 1.11.2026. Selftest:
-FaceTime HD 86 frames in 3 s, moving; Iriun 4 frames (the phone app was not sending); OBS and NDI Virtual Camera 179
-frames, still (their placeholder, no source running). Window screenshot checked: picture full window, bar over it.
+**Verified 1.11.2026:** camera and microphone allowed by Marko. Selftest: FaceTime 30 fps moving; the take
+mb_2026-11-01_06-42-05.mov was hevc hvc1 1920×1080 30/1 at 9.6 Mb/s, aac 48 kHz mono, tmcd 06:42:05:06 = the wall clock
+of its first frame; sound mean −50.7 dB, peak −27.3 dB (the External Microphone in a quiet room). The test take was
+deleted afterwards. Window screenshot: both menus and ● centred, corners key and ✕ right, the meter moving. Release v2
+(0.6 MB DMG) → Site action success → https://mantrawebcamrecorder.pages.dev answers, the DMG 200, "↓ 0 downloads" shows;
+card 21 / SNIMANJE in the bio's Kod tab, HR and EN.
 
-**Code:** `app/App.swift` (start, flags, menu for ⌘Q), `app/Viewer.swift` (window, bar, AVCaptureSession with an
-AVCaptureVideoPreviewLayer, aspect fit; device notifications; selftest frame difference). `icon/make_icon.swift` draws
-the webcam icon with the version.
+**Not yet seen by Marko:** full screen (⌘F / Escape) and a take of his own with REC and the time code on screen.
 
-**Next:** Marko's look in use. Ideas only if he asks: hide the bar until the mouse moves, full screen on double click.
+**Code:** `app/App.swift` (start, flags, ⌘Q menu), `app/Viewer.swift` (window, bar, menus, session with video and audio
+data outputs, recording control, full screen, selftest), `app/Recorder.swift` (AVAssetWriter: HEVC, AAC, the tmcd track),
+`app/Meter.swift` (the VU, the record key, the corners key). `site/public` the page (SEO by kits/seo, bowl, counters).
+
+**Next:** his look in use. The page's banner and lifestyle pictures are real screenshots for now; Nano Banana renders of
+the app in use replace them when made (page-pictures-nano-banana).
