@@ -12,20 +12,40 @@ enum Cameras {
                 return ai != bi ? ai : a.localizedName.localizedStandardCompare(b.localizedName) == .orderedAscending
             }
     }
+    // every sound input: the Mac's microphone, USB interfaces, BlackHole, the iPhone
+    static func microphones() -> [AVCaptureDevice] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified).devices
+            .sorted { $0.localizedName.localizedStandardCompare($1.localizedName) == .orderedAscending }
+    }
 }
 
-final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "webcamviewer.session")
+    private let captureQueue = DispatchQueue(label: "webcamviewer.capture")
     private var window: NSWindow!
     private let picture = NSView()
     private let preview: AVCaptureVideoPreviewLayer
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let recKey = RecordKey()
     private let closeButton = NSButton()
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
+    private let meter = Meter()
+    private let timecode = NSTextField(labelWithString: "")
     private var devices: [AVCaptureDevice] = []
+    private var mics: [AVCaptureDevice] = []
     private var current: AVCaptureDevice?
+    private var currentMic: AVCaptureDevice?
+    private var videoIn: AVCaptureDeviceInput?
+    private var audioIn: AVCaptureDeviceInput?
+    private let videoOut = AVCaptureVideoDataOutput()
+    private let audioOut = AVCaptureAudioDataOutput()
+    private var fps: Int32 = 30
+    private var lastAudioFormat: CMFormatDescription?   // capture queue
+    private var recorder: Recorder?                     // capture queue
+    private var tcTimer: Timer?
     private let test: Bool
     static let barHeight: CGFloat = 38
 
@@ -34,11 +54,21 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         preview = AVCaptureVideoPreviewLayer(session: session)
         super.init()
         buildWindow()
+        videoOut.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+        videoOut.alwaysDiscardsLateVideoFrames = false
+        videoOut.setSampleBufferDelegate(self, queue: captureQueue)
+        audioOut.setSampleBufferDelegate(self, queue: captureQueue)
+        queue.async {
+            self.session.beginConfiguration()
+            if self.session.canAddOutput(self.videoOut) { self.session.addOutput(self.videoOut) }
+            if self.session.canAddOutput(self.audioOut) { self.session.addOutput(self.audioOut) }
+            self.session.commitConfiguration()
+        }
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureDevice.wasConnectedNotification, object: nil)
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureDevice.wasDisconnectedNotification, object: nil)
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
-        askCamera()
+        askAccess()
     }
 
     // MARK: the window
@@ -53,7 +83,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { window.standardWindowButton(b)?.isHidden = true }
         window.isMovableByWindowBackground = true
         window.backgroundColor = .black
-        window.minSize = NSSize(width: 320, height: 180)
+        window.minSize = NSSize(width: 420, height: 200)
         window.isReleasedWhenClosed = false
 
         let content = NSView()
@@ -61,22 +91,40 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         content.layer?.backgroundColor = NSColor.black.cgColor
         window.contentView = content
 
-        // the bar: the camera menu on the left, PERMISSIONS and ✕ on the right
         // v1, Marko, 1.11.2026: "make the semi-transparent choosing the inputs be overlaid over the picture, and the
         // button should be in the top middle of the screen. But don't sacrifice the viewing area."
-        // So the picture fills the whole window and the bar lies over its top edge, half see-through.
+        // v2: "next to the cam input, you also need to bring in audio input ... I also need a record button"
+        // So the picture fills the whole window; over its top edge a half see-through bar: camera · sound · ● centred.
         let bar = NSView()
         bar.wantsLayer = true
         bar.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         bar.translatesAutoresizingMaskIntoConstraints = false
 
-        popup.translatesAutoresizingMaskIntoConstraints = false
-        popup.target = self; popup.action = #selector(picked)
-        popup.controlSize = .regular
-        popup.setAccessibilityIdentifier("camera")
-        popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        popup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        bar.addSubview(popup)
+        for (p, id, tip) in [(popup, "camera", "The camera"), (micPopup, "sound", "The sound input")] {
+            p.target = self
+            p.controlSize = .regular
+            p.setAccessibilityIdentifier(id)
+            p.toolTip = tip
+            p.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            p.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        }
+        popup.action = #selector(picked)
+        micPopup.action = #selector(pickedMic)
+
+        recKey.isBordered = false
+        recKey.title = ""
+        recKey.target = self; recKey.action = #selector(toggleRecord)
+        recKey.setAccessibilityIdentifier("rec")
+        recKey.setAccessibilityLabel("Record")
+        recKey.toolTip = "Record: ~/Movies/mb_<date>_<time>.mov, H.265 1080p 10 Mb/s with time code"
+        recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
+
+        let group = NSStackView(views: [popup, micPopup, recKey])
+        group.orientation = .horizontal
+        group.spacing = 10
+        group.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(group)
 
         permissions.translatesAutoresizingMaskIntoConstraints = false
         permissions.isBordered = false
@@ -84,7 +132,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             .foregroundColor: NSColor.systemOrange, .font: NSFont.systemFont(ofSize: 12, weight: .bold)])
         permissions.target = self; permissions.action = #selector(openPrivacy)
         permissions.setAccessibilityIdentifier("permissions")
-        permissions.toolTip = "The camera is not allowed: opens Privacy & Security → Camera"
         permissions.isHidden = true
         bar.addSubview(permissions)
 
@@ -114,6 +161,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         message.lineBreakMode = .byWordWrapping
         message.maximumNumberOfLines = 0
         content.addSubview(message)
+
+        // the meter: a hairline down the left edge, under the bar
+        meter.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(meter)
+
+        // REC  HH:MM:SS:FF bottom middle while recording: REC red, the time code white, a black shadow, no box
+        timecode.translatesAutoresizingMaskIntoConstraints = false
+        timecode.isHidden = true
+        let sh = NSShadow(); sh.shadowColor = .black; sh.shadowBlurRadius = 3; sh.shadowOffset = .zero
+        timecode.shadow = sh
+        timecode.setAccessibilityIdentifier("timecode")
+        content.addSubview(timecode)
+
         content.addSubview(bar)   // last: over the picture
 
         NSLayoutConstraint.activate([
@@ -122,11 +182,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             bar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             bar.heightAnchor.constraint(equalToConstant: Self.barHeight),
 
-            popup.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            popup.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            popup.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: 10),
-            popup.trailingAnchor.constraint(lessThanOrEqualTo: permissions.leadingAnchor, constant: -10),
-            popup.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            group.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
+            group.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            group.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: 10),
+            group.trailingAnchor.constraint(lessThanOrEqualTo: permissions.leadingAnchor, constant: -10),
 
             closeButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -6),
             closeButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -140,6 +199,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             picture.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             picture.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             picture.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            meter.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            meter.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            meter.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            meter.widthAnchor.constraint(equalToConstant: 6),
+
+            timecode.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            timecode.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
 
             message.centerXAnchor.constraint(equalTo: picture.centerXAnchor),
             message.centerYAnchor.constraint(equalTo: picture.centerYAnchor),
@@ -174,57 +241,85 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     @objc private func closeTapped() { NSApp.terminate(nil) }
 
-    func stop() { queue.sync { if session.isRunning { session.stopRunning() } } }
+    /// stops a running take cleanly (the file is closed), then the session
+    func stop(_ done: (() -> Void)? = nil) {
+        var r: Recorder?
+        captureQueue.sync { r = recorder; recorder = nil }
+        let end = { self.queue.async { if self.session.isRunning { self.session.stopRunning() }; DispatchQueue.main.async { done?() } } }
+        if let r { r.finish { _ in end() } } else { end() }
+    }
 
-    // MARK: permission
+    // MARK: permissions
 
-    private var allowed: Bool { AVCaptureDevice.authorizationStatus(for: .video) == .authorized }
+    private var cameraAllowed: Bool { AVCaptureDevice.authorizationStatus(for: .video) == .authorized }
+    private var micAllowed: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
 
-    private func askCamera() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: refresh()
-        case .notDetermined:
-            say("Waiting for the camera permission…")
-            AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async { self.refresh() } }
-        default: refresh()
+    private func askAccess() {
+        let ask = { (t: AVMediaType, next: @escaping () -> Void) in
+            if AVCaptureDevice.authorizationStatus(for: t) == .notDetermined {
+                AVCaptureDevice.requestAccess(for: t) { _ in DispatchQueue.main.async { next() } }
+            } else { next() }
         }
+        if !cameraAllowed { say("Waiting for the camera permission…") }
+        ask(.video) { ask(.audio) { self.refresh() } }
     }
 
     @objc private func appActive() {
-        // back from System Settings: PERMISSIONS goes by itself once the switch is on
-        if allowed != permissions.isHidden { refresh() }
+        // back from System Settings: PERMISSIONS goes by itself once the switches are on
+        if (cameraAllowed && micAllowed) != permissions.isHidden { refresh() }
     }
 
     @objc private func openPrivacy() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!)
+        let pane = cameraAllowed ? "Privacy_Microphone" : "Privacy_Camera"
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
     }
 
-    // MARK: cameras
+    // MARK: cameras and sound inputs
 
     @objc private func devicesChanged() { DispatchQueue.main.async { self.refresh() } }
 
-    private func refresh() {
-        permissions.isHidden = allowed
-        devices = Cameras.all()
-        popup.removeAllItems()
-        if devices.isEmpty {
-            popup.addItem(withTitle: "No camera")
-            popup.isEnabled = false
-            select(nil)
-            return
-        }
-        popup.isEnabled = true
-        // the same name twice (two identical webcams) gets a number
+    private func fill(_ p: NSPopUpButton, _ list: [AVCaptureDevice]) {
+        p.removeAllItems()
         var seen: [String: Int] = [:]
-        for d in devices {
+        for d in list {
             seen[d.localizedName, default: 0] += 1
             let n = seen[d.localizedName]!
-            popup.addItem(withTitle: n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName)
+            p.addItem(withTitle: n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName)
         }
-        let remembered = current?.uniqueID ?? UserDefaults.standard.string(forKey: "camera")
-        let index = devices.firstIndex { $0.uniqueID == remembered } ?? 0
-        popup.selectItem(at: index)
-        if current?.uniqueID != devices[index].uniqueID || !session.isRunning { select(devices[index]) }
+    }
+
+    private func refresh() {
+        permissions.isHidden = cameraAllowed && micAllowed
+        permissions.toolTip = !cameraAllowed ? "The camera is not allowed: opens Privacy & Security → Camera"
+            : "The microphone is not allowed: opens Privacy & Security → Microphone"
+
+        devices = Cameras.all()
+        if devices.isEmpty {
+            popup.removeAllItems(); popup.addItem(withTitle: "No camera"); popup.isEnabled = false
+            select(nil)
+        } else {
+            popup.isEnabled = true
+            fill(popup, devices)
+            let remembered = current?.uniqueID ?? UserDefaults.standard.string(forKey: "camera")
+            let i = devices.firstIndex { $0.uniqueID == remembered } ?? 0
+            popup.selectItem(at: i)
+            if current?.uniqueID != devices[i].uniqueID || !session.isRunning { select(devices[i]) }
+        }
+
+        // the sound: every input, then "No sound"; the first time the Mac's own default input
+        mics = Cameras.microphones()
+        fill(micPopup, mics)
+        micPopup.addItem(withTitle: "No sound")
+        let noSound = UserDefaults.standard.bool(forKey: "nosound")
+        let rememberedMic = currentMic?.uniqueID ?? UserDefaults.standard.string(forKey: "sound") ?? AVCaptureDevice.default(for: .audio)?.uniqueID
+        if noSound || mics.isEmpty {
+            micPopup.selectItem(at: mics.count)
+            if currentMic != nil || audioIn != nil { selectMic(nil) }
+        } else {
+            let i = mics.firstIndex { $0.uniqueID == rememberedMic } ?? 0
+            micPopup.selectItem(at: i)
+            if currentMic?.uniqueID != mics[i].uniqueID || audioIn == nil { selectMic(mics[i]) }
+        }
     }
 
     @objc private func picked() {
@@ -234,47 +329,160 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         select(devices[i])
     }
 
+    @objc private func pickedMic() {
+        let i = micPopup.indexOfSelectedItem
+        if i >= 0, i < mics.count {
+            UserDefaults.standard.set(mics[i].uniqueID, forKey: "sound")
+            UserDefaults.standard.set(false, forKey: "nosound")
+            selectMic(mics[i])
+        } else {
+            UserDefaults.standard.set(true, forKey: "nosound")
+            selectMic(nil)
+        }
+    }
+
     private func select(_ device: AVCaptureDevice?) {
+        if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
         guard let device else {
-            queue.async { self.session.stopRunning() }
+            queue.async { if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil } }
             say("No camera is connected.")
             return
         }
-        guard allowed else { say("The camera is not allowed.\nPERMISSIONS, top right, opens the switch."); return }
+        guard cameraAllowed else { say("The camera is not allowed.\nPERMISSIONS, top right, opens the switch."); return }
         say("")
         queue.async {
             self.session.beginConfiguration()
-            for i in self.session.inputs { self.session.removeInput(i) }
+            if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil }
             do {
                 let input = try AVCaptureDeviceInput(device: device)
-                if self.session.canAddInput(input) { self.session.addInput(input) }
-                self.session.sessionPreset = self.session.canSetSessionPreset(.high) ? .high : .medium
+                if self.session.canAddInput(input) { self.session.addInput(input); self.videoIn = input }
+                self.session.sessionPreset = self.session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080
+                    : self.session.canSetSessionPreset(.high) ? .high : .medium
             } catch {
                 DispatchQueue.main.async { self.say("\(device.localizedName) cannot be opened:\n\(error.localizedDescription)") }
             }
             self.session.commitConfiguration()
+            self.fps = Self.wholeFrameRate(device)
             if !self.session.isRunning { self.session.startRunning() }
+        }
+    }
+
+    // the time code counts whole frames: the camera is set to a whole rate (30, else 25, 24, 60, 50) where it can be,
+    // so the frames and the clock agree; the rate it ends up on, rounded, is the time code's
+    private static func wholeFrameRate(_ d: AVCaptureDevice) -> Int32 {
+        let ranges = d.activeFormat.videoSupportedFrameRateRanges
+        for r in [30.0, 25, 24, 60, 50] where ranges.contains(where: { $0.minFrameRate <= r && r <= $0.maxFrameRate }) {
+            if (try? d.lockForConfiguration()) != nil {
+                d.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(r))
+                d.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(r))
+                d.unlockForConfiguration()
+            }
+            return Int32(r)
+        }
+        let dur = CMTimeGetSeconds(d.activeVideoMinFrameDuration)
+        return dur > 0 ? Int32(max(1, min(120, (1 / dur).rounded()))) : 30
+    }
+
+    private func selectMic(_ device: AVCaptureDevice?) {
+        if isRecording { stopRecording() }
+        currentMic = device
+        meter.dead = device == nil || !micAllowed
+        queue.async {
+            self.session.beginConfiguration()
+            if let a = self.audioIn { self.session.removeInput(a); self.audioIn = nil }
+            if let device, self.micAllowed, let input = try? AVCaptureDeviceInput(device: device), self.session.canAddInput(input) {
+                self.session.addInput(input); self.audioIn = input
+            }
+            self.session.commitConfiguration()
+            self.captureQueue.async { self.lastAudioFormat = nil }
         }
     }
 
     private func say(_ s: String) { message.stringValue = s; message.isHidden = s.isEmpty }
 
+    // MARK: recording
+
+    var isRecording: Bool { recKey.recording }
+
+    @objc func toggleRecord() { isRecording ? stopRecording() : startRecording() }
+
+    func startRecording(_ started: ((URL?) -> Void)? = nil) {
+        guard current != nil, cameraAllowed else { say("No camera to record."); started?(nil); return }
+        let fps = self.fps
+        captureQueue.async {
+            do {
+                let r = try Recorder(fps: fps, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
+                self.recorder = r
+                DispatchQueue.main.async { self.recordingStarted(fps: fps); started?(r.url) }
+            } catch {
+                DispatchQueue.main.async { self.say("Cannot record:\n\(error.localizedDescription)"); started?(nil) }
+            }
+        }
+    }
+
+    private func recordingStarted(fps: Int32) {
+        recKey.recording = true
+        recKey.toolTip = "Stop recording"
+        timecode.isHidden = false
+        showTimecode(fps)
+        tcTimer = Timer.scheduledTimer(withTimeInterval: 1 / Double(fps) / 2, repeats: true) { _ in self.showTimecode(fps) }
+    }
+
+    // the real-time clock, the same clock the file's time code starts from
+    private func showTimecode(_ fps: Int32) {
+        let t = Recorder.timecode(Date(), fps: fps).text
+        let s = NSMutableAttributedString(string: "REC  ", attributes: [
+            .foregroundColor: NSColor(srgbRed: 1, green: 0.231, blue: 0.188, alpha: 1),
+            .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)])
+        s.append(NSAttributedString(string: t, attributes: [
+            .foregroundColor: NSColor.white, .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)]))
+        timecode.attributedStringValue = s
+    }
+
+    func stopRecording(_ done: ((Recorder?) -> Void)? = nil) {
+        tcTimer?.invalidate(); tcTimer = nil
+        recKey.recording = false
+        recKey.toolTip = "Record"
+        timecode.isHidden = true
+        var r: Recorder?
+        captureQueue.sync { r = recorder; recorder = nil }
+        guard let r else { done?(nil); return }
+        r.finish { r in DispatchQueue.main.async {
+            if let f = r.failed { self.say("The take failed:\n\(f)") }
+            done?(r)
+        } }
+    }
+
+    // MARK: samples (capture queue)
+
+    func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
+        if o === audioOut {
+            lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
+            recorder?.appendAudio(sb)
+            let rms = Meter.rms(sb)
+            DispatchQueue.main.async { self.meter.setLevel(rms) }
+        } else {
+            recorder?.appendVideo(sb)
+            if selftesting { selftestFrame(sb) }
+        }
+    }
+
     // MARK: selftest (the app checks itself: frames arrive and the picture moves)
 
+    private var selftesting = false
     private var frames = 0
     private var lumas: [Double] = []
     private var prev: [Double] = []
-    private let output = AVCaptureVideoDataOutput()
 
     func runSelftest(to path: String) {
-        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "webcamviewer.frames"))
-        queue.async { if self.session.canAddOutput(self.output) { self.session.addOutput(self.output) } }
-        // the permission prompt is Marko's to answer: wait up to two minutes for it
+        selftesting = true
+        // the permission prompts are Marko's to answer: wait up to two minutes for them
         var waited = 0.0
         func go() {
-            if self.allowed || waited >= 120 || AVCaptureDevice.authorizationStatus(for: .video) == .denied {
+            let decided = AVCaptureDevice.authorizationStatus(for: .video) != .notDetermined
+                && AVCaptureDevice.authorizationStatus(for: .audio) != .notDetermined
+            if decided || waited >= 120 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.refresh(); self.testNext(0, report: [], to: path) }
             } else { waited += 1; DispatchQueue.main.asyncAfter(deadline: .now() + 1) { go() } }
         }
@@ -285,37 +493,56 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         var report = report
         if report.isEmpty {
             report.append("\(NAME) v\(VERSION) selftest \(Date())")
-            report.append("camera permission: \(allowed ? "allowed" : "NOT allowed")")
-            report.append("cameras seen: \(devices.count)")
+            report.append("camera permission: \(cameraAllowed ? "allowed" : "NOT allowed"), microphone: \(micAllowed ? "allowed" : "NOT allowed")")
+            report.append("cameras seen: \(devices.count), sound inputs: \(mics.count) (\(mics.map(\.localizedName).joined(separator: ", ")))")
+            report.append("sound input in use: \(currentMic?.localizedName ?? "none")")
         }
-        guard allowed, i < devices.count else {
-            try? report.joined(separator: "\n").appending("\n").write(toFile: path, atomically: true, encoding: .utf8)
-            NSApp.terminate(nil); return
-        }
+        guard cameraAllowed, i < devices.count else { finishSelftest(report, to: path); return }
         popup.selectItem(at: i); select(devices[i])   // a test never changes the remembered camera
-        frames = 0; lumas = []; prev = []
+        captureQueue.async { self.frames = 0; self.prev = [] }
+        lumas = []
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             let diff = self.lumas.isEmpty ? 0 : self.lumas.reduce(0, +) / Double(self.lumas.count)
-            report.append(String(format: "%@ | %@ | %d frames in 3 s | mean frame difference %.2f (%@)",
-                                 self.devices[i].localizedName, self.devices[i].deviceType.rawValue, self.frames,
-                                 diff, diff > 0.3 ? "moving" : "STILL OR FROZEN"))
+            report.append(String(format: "%@ | %d fps | %d frames in 3 s | mean frame difference %.2f (%@)",
+                                 self.devices[i].localizedName, self.fps, self.frames, diff, diff > 0.3 ? "moving" : "STILL OR FROZEN"))
             self.testNext(i + 1, report: report, to: path)
         }
     }
 
-    func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
+    // then a 6-second take on the remembered camera: the file is checked from outside with ffprobe
+    private func finishSelftest(_ report: [String], to path: String) {
+        var report = report
+        guard cameraAllowed, !devices.isEmpty else {
+            try? report.joined(separator: "\n").appending("\n").write(toFile: path, atomically: true, encoding: .utf8)
+            NSApp.terminate(nil); return
+        }
+        let remembered = UserDefaults.standard.string(forKey: "camera")
+        let i = devices.firstIndex { $0.uniqueID == remembered } ?? 0
+        popup.selectItem(at: i); select(devices[i])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.startRecording { url in
+                report.append("take started: \(url?.path ?? "FAILED")")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                    self.stopRecording { r in
+                        report.append("take: \(r?.url.path ?? "-") | camera \(self.devices[i].localizedName) | \(r?.fps ?? 0) fps | time code starts \(r?.startTimecode ?? "-") (wall clock \(r?.startClock.map { "\($0)" } ?? "-")) | \(r?.failed ?? "closed")")
+                        try? report.joined(separator: "\n").appending("\n").write(toFile: path, atomically: true, encoding: .utf8)
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private func selftestFrame(_ sb: CMSampleBuffer) {
         frames += 1
         guard frames % 5 == 0, let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         CVPixelBufferLockBaseAddress(pb, .readOnly); defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(pb) else { return }
-        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb), row = CVPixelBufferGetBytesPerRow(pb)
+        // the luma plane of 420v
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) else { return }
+        let w = CVPixelBufferGetWidthOfPlane(pb, 0), h = CVPixelBufferGetHeightOfPlane(pb, 0), row = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
         let p = base.assumingMemoryBound(to: UInt8.self)
         var sample: [Double] = []
-        for y in stride(from: 0, to: h, by: 16) { for x in stride(from: 0, to: w, by: 16) {
-            let o = y * row + x * 4
-            sample.append(0.114 * Double(p[o]) + 0.587 * Double(p[o + 1]) + 0.299 * Double(p[o + 2]))
-        } }
-        // the frame difference: mean absolute change against the previous sampled frame (video-feed-never-frozen)
+        for y in stride(from: 0, to: h, by: 16) { for x in stride(from: 0, to: w, by: 16) { sample.append(Double(p[y * row + x])) } }
         var l = 0.0
         if prev.count == sample.count, !sample.isEmpty { l = zip(sample, prev).reduce(0) { $0 + abs($1.0 - $1.1) } / Double(sample.count) }
         let first = prev.isEmpty
