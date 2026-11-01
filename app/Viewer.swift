@@ -31,6 +31,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let recKey = RecordKey()
     let sonyBar = SonyBar()
     let sony = SonyCamera()
+    private let keepStreaming = KeepStreaming()
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
@@ -50,6 +51,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var lastAudioFormat: CMFormatDescription?   // capture queue
     private var recorder: Recorder?                     // capture queue
     private var tcTimer: Timer?
+    private var liveFrames = 0          // capture queue: frames of the chosen camera
+    private var watchdog: Timer?
+    private var lastSeen = 0
+    private var silentTicks = 0
     private let test: Bool
     static let barHeight: CGFloat = 38
 
@@ -74,6 +79,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
         startSony()
+        // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
+        // have held it when it was chosen)
+        watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkFrames() }
     }
 
     // MARK: the Sony (v4): the group in the bar while it is connected, a click on the picture a touch on its screen
@@ -100,6 +108,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     /// the group shows while a Sony is reachable: green-able over PTP (Remote Shoot), all grey while the chosen picture is
     /// the Sony itself streaming over USB (nothing can be controlled then)
+    /// the Sony kept on Streaming:Output while it is not the chosen camera (the chosen one is open anyway)
+    private func holdSony() {
+        guard cameraAllowed else { return }
+        let sony = devices.first { KeepStreaming.isSony($0) && $0.uniqueID != current?.uniqueID }
+        keepStreaming.hold(sony)
+    }
+
     func updateSonyBar() {
         let streamingSony = current.map { $0.localizedName.uppercased().hasPrefix("ILCE") || $0.manufacturer.uppercased().contains("SONY") } ?? false
         if sony.ready {
@@ -111,6 +126,20 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             sonyBar.setControllable(false, name: c.localizedName)
         } else {
             sonyBar.isHidden = true
+        }
+    }
+
+    private func checkFrames() {
+        guard let cur = current, cameraAllowed else { silentTicks = 0; return }
+        var n = 0
+        captureQueue.sync { n = liveFrames }
+        if n != lastSeen { lastSeen = n; silentTicks = 0; if message.stringValue.hasPrefix("No picture") { say("") }; return }
+        silentTicks += 1
+        if silentTicks == 3 {
+            NSLog("Webcam Recorder: no frames from %@, opening it again", cur.localizedName)
+            select(cur)
+        } else if silentTicks == 8 {
+            say("No picture from \(cur.localizedName).\nAnother app may hold it, or the camera sends nothing.")
         }
     }
 
@@ -344,6 +373,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
+        keepStreaming.stop()
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
         let end = { self.queue.async { if self.session.isRunning { self.session.stopRunning() }; DispatchQueue.main.async { done?() } } }
@@ -446,6 +476,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
         updateSonyBar()
+        holdSony()
         guard let device else {
             queue.async { if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil } }
             say("No camera is connected.")
@@ -453,6 +484,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         guard cameraAllowed else { say("The camera is not allowed.\nPERMISSIONS, top right, opens the switch."); return }
         say("")
+        // the keeper lets go of this Sony before the picture opens it (both at once left the picture black)
+        if KeepStreaming.isSony(device) { keepStreaming.releaseNow() }
         queue.async {
             self.session.beginConfiguration()
             if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil }
@@ -565,6 +598,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             let rms = Meter.rms(sb)
             DispatchQueue.main.async { self.meter.setLevels(rms) }
         } else {
+            liveFrames &+= 1
             recorder?.appendVideo(sb)
             if selftesting { selftestFrame(sb) }
         }

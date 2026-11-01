@@ -35,3 +35,7 @@
 Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no start key: Standby until an app on the computer opens the camera, Output while one does; it ends only by unplugging. The only USB mode the computer may request is MSC (0xF012, value 0x0001), so the Mac cannot switch the camera into streaming or out of it.
 
 **1.11.2026 (v4):** Marko: *"Please make my application activate this camera streaming always even if it's not selected."*
+
+**1.11.2026 (v4):** Marko: *"I just opened the, the, in the different application, this camera. Look at, take a screenshot and you will understand everything. It's too much talking, talking, talking, talking, talking."* (Riverside showed the Sony, Webcam Recorder was black: the keeper and the picture held the Sony at once. Fixed: the keeper lets go first, a watchdog reopens a camera that sends no frames for 3 s.)
+
+**1.11.2026:** Marko: *"The streaming size can be configured inside the application. Inside the camera actually. Let me know how in camera I can adjust streaming. Let me know where in menu is that. What quality is it?"*

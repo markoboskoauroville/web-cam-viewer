@@ -10,9 +10,11 @@ BID=community.auroville.webcamviewer
 APP="build/$NAME.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # universal: Apple Silicon and Intel (the page offers it to everyone)
+rm -f build/WCR-arm64 build/WCR-x86_64   # a failed compile must never pass as built with the last binaries
 for A in arm64 x86_64; do
   swiftc -O -swift-version 5 -parse-as-library -target $A-apple-macosx14.0 -o build/WCR-$A app/*.swift 2>&1 | grep -v "warning:" || true
 done
+[ -f build/WCR-arm64 ] && [ -f build/WCR-x86_64 ] || { echo "the app did not build"; exit 1; }
 lipo -create build/WCR-arm64 build/WCR-x86_64 -output "$APP/Contents/MacOS/WebCamViewer"
 [ -x "$APP/Contents/MacOS/WebCamViewer" ] || { echo "the app did not build"; exit 1; }
 cat > "$APP/Contents/Info.plist" <<PL
