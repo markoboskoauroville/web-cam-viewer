@@ -33,3 +33,5 @@
 **1.11.2026:** Marko: *"And let me know how can I in my camera put a button if streaming is stopped to push it again. One hotkey button. I know how to get in hotkey menu but I don't know how to find it in the menu of hotkey that command which is pausing or pushing streaming."*
 
 Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no start key: Standby until an app on the computer opens the camera, Output while one does; it ends only by unplugging. The only USB mode the computer may request is MSC (0xF012, value 0x0001), so the Mac cannot switch the camera into streaming or out of it.
+
+**1.11.2026 (v4):** Marko: *"Please make my application activate this camera streaming always even if it's not selected."*
