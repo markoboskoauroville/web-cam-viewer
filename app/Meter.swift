@@ -79,10 +79,10 @@ final class Meter: NSView {
 }
 
 // v3, Marko, 1.11.2026: "two hairlines ... for the left and right channels". Two meters side by side down the left edge,
-// L on the outside, R beside it, a 2 pt gap; a mono input lights both alike.
+// L on the outside, R beside it, no gap (v4); a mono input lights both alike.
 final class StereoMeter: NSView {
     let left = Meter(), right = Meter()
-    static let hairline: CGFloat = 3, gap: CGFloat = 2
+    static let hairline: CGFloat = 2, gap: CGFloat = 0   // v4: two hairlines touching, L outside, R beside it
     var dead = true { didSet { left.dead = dead; right.dead = dead } }
     override init(frame: NSRect) {
         super.init(frame: frame)

@@ -39,3 +39,5 @@ Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no sta
 **1.11.2026 (v4):** Marko: *"I just opened the, the, in the different application, this camera. Look at, take a screenshot and you will understand everything. It's too much talking, talking, talking, talking, talking."* (Riverside showed the Sony, Webcam Recorder was black: the keeper and the picture held the Sony at once. Fixed: the keeper lets go first, a watchdog reopens a camera that sends no frames for 3 s.)
 
 **1.11.2026:** Marko: *"The streaming size can be configured inside the application. Inside the camera actually. Let me know how in camera I can adjust streaming. Let me know where in menu is that. What quality is it?"*
+
+**1.11.2026 (v4):** Marko: *"In the full screen, please show me VU meter. And both VU meters, full screen, not full screen, should be hairline on the left side without any gap between two VU meters, left and right. Also in the full screen, you need to show me recording, running recording time. So these two things are staying in full screen."*

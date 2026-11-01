@@ -35,6 +35,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
+    private var meterTop: NSLayoutConstraint!
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
     private let meter = StereoMeter()
@@ -273,7 +274,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         content.addSubview(timecode)
 
         content.addSubview(bar)   // last: over the picture
-        overlays = [bar, meter]
+        overlays = [bar]   // v4: full screen keeps the meters and the REC time code (Marko, 1.11.2026)
 
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(enteredFull), name: NSWindow.willEnterFullScreenNotification, object: window)
@@ -316,7 +317,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             picture.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
             meter.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            meter.topAnchor.constraint(equalTo: bar.bottomAnchor),
             meter.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             meter.widthAnchor.constraint(equalToConstant: StereoMeter.width),
 
@@ -327,6 +327,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             message.centerYAnchor.constraint(equalTo: picture.centerYAnchor),
             message.widthAnchor.constraint(lessThanOrEqualTo: picture.widthAnchor, constant: -32),
         ])
+        meterTop = meter.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
+        meterTop.isActive = true
         NotificationCenter.default.addObserver(self, selector: #selector(layoutPreview), name: NSView.frameDidChangeNotification, object: picture)
         picture.postsFrameChangedNotifications = true
 
@@ -363,12 +365,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func toggleFull() { window.toggleFullScreen(nil) }
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
-        timecode.alphaValue = 0
+        meterTop.constant = 0   // the meters the whole height
         NSCursor.setHiddenUntilMouseMoves(true)
     }
     @objc private func leftFull() {
         overlays.forEach { $0.isHidden = false }
-        timecode.alphaValue = 1
+        meterTop.constant = Self.barHeight
     }
 
     /// stops a running take cleanly (the file is closed), then the session
