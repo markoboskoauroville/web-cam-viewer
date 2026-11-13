@@ -25,5 +25,5 @@ D=$(hdiutil attach -nobrowse -noverify -noautoopen build/tmp.dmg | awk -F'\t' '/
 command -v SetFile >/dev/null && SetFile -a C "$D" || true
 hdiutil detach -quiet "$D"
 hdiutil convert -quiet build/tmp.dmg -format UDZO -imagekey zlib-level=9 -o "$OUT"; rm -f build/tmp.dmg
-codesign --force -s "Mantra Apps" "$OUT"
+codesign --force -s "${SIGN:-Mantra Apps}" "$OUT"
 ls -l "$OUT"
