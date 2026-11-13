@@ -43,3 +43,7 @@ Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no sta
 **1.11.2026 (v4):** Marko: *"In the full screen, please show me VU meter. And both VU meters, full screen, not full screen, should be hairline on the left side without any gap between two VU meters, left and right. Also in the full screen, you need to show me recording, running recording time. So these two things are staying in full screen."*
 
 **Status at closing (1.11.2026):** all requests above are built and released up to v4, except: the Sony controls are greyed while the camera streams (cannot be controlled over USB Streaming; tested when the HDMI capture card arrives), and the one-cable mode switcher was offered, not built.
+
+## 13.11.2026: vertical slice, as in the classroom (for the MPA Lessons Analyzer shooting, MPA request 256)
+Marko: "this is in the lesson recorder. Also, make the slice view the same as in my video Ninja in my classroom and on my website, so I can also slice. I want to have the horizontal camera as it is now and record it as vertical camera with a simple trick of slicing"
+**Status:** saved first (read as: Webcam Recorder (Mantra) gets a "vertical slice" choice per camera like the MPA classroom (`sliceOf()` in MPA website/site/portal/room.html: the middle 9:16 at full height, e.g. 1215x2160 from the α7 V's 3840x2160, scaled in halves to 1080x1920); the preview shows the slice and the recording is written vertical. The Sony α7 V (ILCE-7M5) is on USB since 13.11.2026 10:0x.)
