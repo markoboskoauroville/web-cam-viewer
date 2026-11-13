@@ -47,3 +47,7 @@ Found (Help Guide p.415, PTP 3 Reference pp.682–683): USB Streaming has no sta
 ## 13.11.2026: vertical slice, as in the classroom (for the MPA Lessons Analyzer shooting, MPA request 256)
 Marko: "this is in the lesson recorder. Also, make the slice view the same as in my video Ninja in my classroom and on my website, so I can also slice. I want to have the horizontal camera as it is now and record it as vertical camera with a simple trick of slicing"
 **Status (13.11.2026): built as v5, pushed, GitHub run and release below in TAKEOVER; not yet seen by Marko.** Saved first (read as: Webcam Recorder (Mantra) gets a "vertical slice" choice per camera like the MPA classroom (`sliceOf()` in MPA website/site/portal/room.html: the middle 9:16 at full height, e.g. 1215x2160 from the α7 V's 3840x2160, scaled in halves to 1080x1920); the preview shows the slice and the recording is written vertical. The Sony α7 V (ILCE-7M5) is on USB since 13.11.2026 10:0x.)
+
+## 13.11.2026: v6, a local HTTP API (MPA_LESSONS_ANALYZER request "Beatrice guides the shooting")
+Marko 13.11.2026: "Beatrice needs to guide me ... I say yes, and then it opens up the Sony webcam, and it records. I press stop"
+**Status:** saved first; building as v6 (127.0.0.1 only; /status /cameras /camera /record/start /record/stop /front).
