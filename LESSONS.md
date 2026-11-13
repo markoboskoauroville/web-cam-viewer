@@ -33,3 +33,10 @@
 13. **macOS has no `AVCaptureSession.Preset.inputPriority`** and no ICDeviceBrowser `controlAuthorization`: use
     hd1920x1080 when `canSetSessionPreset`, and skip the authorization call.
 14. **The streaming resolution is set in the camera**, not by the app: the α7 V at HD(720p) 25p offers only 1280×720 MJPEG.
+15. **Closed popup shows 8 letters (v5):** "<camera> · vertical slice" and "<camera>" are the same eight letters, so the cell draws
+    slice entries as "▯ " + six letters (ShortPopUpCell).
+16. **Slice = new sample buffer with the old time stamps (13.11.2026).** Crop + Lanczos in Core Image into a pooled 1080x1920
+    BGRA buffer, CMSampleBufferCreateReadyWithImageBuffer with the camera's timing; the recorder's time code and the audio
+    need no change. The display layer needs DisplayImmediately on each buffer (no timebase). No Mac compile: GitHub only.
+17. **A GitHub-made release must carry the DMG** (the Site action runs on "release published" and needs exactly one .dmg):
+    build.yml creates the release with app.zip and the DMG in one call; make_dmg.sh and build.sh honour SIGN=- (runner).

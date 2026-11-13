@@ -7,7 +7,9 @@ enum Cameras {
         AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera, .deskViewCamera],
             mediaType: .video, position: .unspecified).devices
-            .sorted { a, b in   // a fixed order: the Mac's own camera first, then by name
+            .sorted { a, b in   // a fixed order: the Sony first (as in the classroom, v5), the Mac's own camera, then by name
+                let asn = KeepStreaming.isSony(a), bsn = KeepStreaming.isSony(b)
+                if asn != bsn { return asn }
                 let ai = a.deviceType == .builtInWideAngleCamera, bi = b.deviceType == .builtInWideAngleCamera
                 return ai != bi ? ai : a.localizedName.localizedStandardCompare(b.localizedName) == .orderedAscending
             }
@@ -41,6 +43,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
     private var devices: [AVCaptureDevice] = []
+    // v5: every camera is followed by its "· vertical slice" entry; an entry is (camera index, slice?)
+    private var entries: [(device: Int, slice: Bool)] = []
+    private let slicer = Slicer()
+    private let sliceLayer = AVSampleBufferDisplayLayer()
+    private var sliceOn = false                        // capture queue
+    private var horizontalSize: NSSize?                // the window's size before a slice, to go back to
+    static let sliceSuffix = " · vertical slice"
+    static func sliceKey(_ d: AVCaptureDevice) -> String { "slice.\(d.uniqueID)" }
     private var mics: [AVCaptureDevice] = []
     private var current: AVCaptureDevice?
     private var currentMic: AVCaptureDevice?
@@ -150,6 +160,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func pictureClicked(_ g: NSClickGestureRecognizer) {
         guard sony.ready else { return }
         let p = g.location(in: picture)
+        if !sliceLayer.isHidden {    // v5: a point on the vertical picture is a point inside the middle strip of the frame
+            let r = AVMakeRect(aspectRatio: CGSize(width: Slicer.outW, height: Slicer.outH), insideRect: picture.bounds)
+            let nx = (p.x - r.minX) / r.width, ny = 1 - (p.y - r.minY) / r.height
+            let src = slicer.sourceSize
+            guard (0...1).contains(nx), (0...1).contains(ny), src.width > 0 else { return }
+            let fw = CGFloat(Slicer.stripWidth(w: Int(src.width), h: Int(src.height))) / src.width
+            sony.touch(nx: (1 - fw) / 2 + nx * fw, ny: ny)
+            return
+        }
         // the view's point in the preview layer's own coordinates, then the picture's 0…1, top-left origin
         // (the letterbox bands fall outside 0…1 and do nothing)
         let lp = picture.layer.map { $0.convert(p, to: preview) } ?? p
@@ -251,6 +270,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         preview.videoGravity = .resizeAspect           // the whole picture, never cropped
         preview.backgroundColor = NSColor.black.cgColor
         picture.layer?.addSublayer(preview)
+        sliceLayer.videoGravity = .resizeAspect          // the whole vertical picture, never cropped
+        sliceLayer.backgroundColor = NSColor.black.cgColor
+        sliceLayer.isHidden = true
+        picture.layer?.addSublayer(sliceLayer)
         content.addSubview(picture)
 
         message.translatesAutoresizingMaskIntoConstraints = false
@@ -347,6 +370,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func layoutPreview() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         preview.frame = picture.bounds
+        sliceLayer.frame = picture.bounds
         CATransaction.commit()
     }
 
@@ -421,6 +445,22 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
     }
 
+    /// v5: the camera menu: each camera, then "<camera> · vertical slice"
+    private func fillCameras() {
+        popup.removeAllItems()
+        entries = []
+        var seen: [String: Int] = [:]
+        for (i, d) in devices.enumerated() {
+            seen[d.localizedName, default: 0] += 1
+            let n = seen[d.localizedName]!
+            let name = n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName
+            popup.addItem(withTitle: name); entries.append((i, false))
+            popup.addItem(withTitle: name + Self.sliceSuffix); entries.append((i, true))
+        }
+    }
+    private func entryIndex(_ device: Int, slice: Bool) -> Int { entries.firstIndex { $0.device == device && $0.slice == slice } ?? 0 }
+    private func savedSlice(_ d: AVCaptureDevice) -> Bool { UserDefaults.standard.bool(forKey: Self.sliceKey(d)) }
+
     private func refresh() {
         permissions.isHidden = cameraAllowed && micAllowed
         permissions.toolTip = !cameraAllowed ? "The camera is not allowed: opens Privacy & Security → Camera"
@@ -432,10 +472,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             select(nil)
         } else {
             popup.isEnabled = true
-            fill(popup, devices)
+            fillCameras()
             let remembered = current?.uniqueID ?? UserDefaults.standard.string(forKey: "camera")
             let i = devices.firstIndex { $0.uniqueID == remembered } ?? 0
-            popup.selectItem(at: i)
+            popup.selectItem(at: entryIndex(i, slice: savedSlice(devices[i])))
             if current?.uniqueID != devices[i].uniqueID || !session.isRunning { select(devices[i]) }
         }
 
@@ -456,10 +496,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     @objc private func picked() {
-        let i = popup.indexOfSelectedItem
-        guard i >= 0, i < devices.count else { return }
+        let e = popup.indexOfSelectedItem
+        guard e >= 0, e < entries.count else { return }
+        let (i, slice) = entries[e]
         UserDefaults.standard.set(devices[i].uniqueID, forKey: "camera")
-        select(devices[i])
+        UserDefaults.standard.set(slice, forKey: Self.sliceKey(devices[i]))   // remembered per camera
+        if current?.uniqueID == devices[i].uniqueID {      // the same camera: only the picture changes, the camera stays open
+            if isRecording { stopRecording() }
+            applyMode(slice)
+        } else { select(devices[i]) }
     }
 
     @objc private func pickedMic() {
@@ -477,6 +522,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func select(_ device: AVCaptureDevice?) {
         if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
+        applyMode(device.map { savedSlice($0) } ?? false)
         updateSonyBar()
         holdSony()
         guard let device else {
@@ -503,6 +549,25 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             self.fps = Self.wholeFrameRate(device)
             if !self.session.isRunning { self.session.startRunning() }
         }
+    }
+
+    /// v5: horizontal (the camera's own preview) or vertical slice (the sliced frames); the window fits the picture
+    private func applyMode(_ slice: Bool) {
+        captureQueue.async { self.sliceOn = slice }
+        preview.isHidden = slice
+        sliceLayer.isHidden = !slice
+        if !slice { sliceLayer.flushAndRemoveImage() }
+        guard !isFull, let cv = window.contentView else { return }
+        let cs = cv.frame.size
+        if slice, cs.width > cs.height * 0.6 {
+            horizontalSize = cs
+            let room = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+            let h = min(max(cs.height, 720), room - 60), w = (h * 9 / 16).rounded()
+            window.setContentSize(NSSize(width: w, height: h))
+        } else if !slice, cs.height > cs.width {
+            window.setContentSize(horizontalSize ?? NSSize(width: 800, height: 450))
+        } else { return }
+        if let s = window.screen { window.setFrame(window.constrainFrameRect(window.frame, to: s), display: true) }
     }
 
     // the time code counts whole frames: the camera is set to a whole rate (30, else 25, 24, 60, 50) where it can be,
@@ -549,7 +614,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let fps = self.fps
         captureQueue.async {
             do {
-                let r = try Recorder(fps: fps, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
+                let r = try Recorder(fps: fps, vertical: self.sliceOn, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
                 self.recorder = r
                 DispatchQueue.main.async { self.recordingStarted(fps: fps); started?(r.url) }
             } catch {
@@ -601,7 +666,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             DispatchQueue.main.async { self.meter.setLevels(rms) }
         } else {
             liveFrames &+= 1
-            recorder?.appendVideo(sb)
+            if sliceOn, let v = slicer.slice(sb) {
+                // v5: the vertical frame is what is shown and what is recorded; ASAP display, the recorder keeps the stamps
+                if let a = CMSampleBufferGetSampleAttachmentsArray(v, createIfNecessary: true) as? [NSMutableDictionary] {
+                    a.first?.setValue(true, forKey: kCMSampleAttachmentKey_DisplayImmediately as String)
+                }
+                sliceLayer.enqueue(v)
+                recorder?.appendVideo(v)
+            } else if !sliceOn { recorder?.appendVideo(sb) }
             if selftesting { selftestFrame(sb) }
         }
     }
@@ -636,7 +708,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             report.append("sound input in use: \(currentMic?.localizedName ?? "none")")
         }
         guard cameraAllowed, i < devices.count else { finishSelftest(report, to: path); return }
-        popup.selectItem(at: i); select(devices[i])   // a test never changes the remembered camera
+        popup.selectItem(at: entryIndex(i, slice: false)); select(devices[i])   // a test never changes the remembered camera
         captureQueue.async { self.frames = 0; self.prev = [] }
         lumas = []
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
@@ -656,7 +728,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         let remembered = UserDefaults.standard.string(forKey: "camera")
         let i = devices.firstIndex { $0.uniqueID == remembered } ?? 0
-        popup.selectItem(at: i); select(devices[i])
+        popup.selectItem(at: entryIndex(i, slice: false)); select(devices[i])
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.startRecording { url in
                 report.append("take started: \(url?.path ?? "FAILED")")

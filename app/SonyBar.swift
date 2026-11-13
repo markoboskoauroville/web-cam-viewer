@@ -89,7 +89,14 @@ final class SonyBar: NSStackView {
 // characters, and that's enough"); the open menu still lists the full names.
 final class ShortPopUpCell: NSPopUpButtonCell {
     override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
-        let n = (String(title.string.prefix(8)) as NSString).length
+        // v5: "<camera> · vertical slice" would show the same eight letters as the camera: it shows "▯ " and six letters
+        let t = title.string
+        if t.hasSuffix(Viewer.sliceSuffix) {
+            let short = "▯ " + String(t.dropLast(Viewer.sliceSuffix.count).prefix(6))
+            return super.drawTitle(NSAttributedString(string: short, attributes: title.attributes(at: 0, effectiveRange: nil)),
+                                   withFrame: frame, in: controlView)
+        }
+        let n = (String(t.prefix(8)) as NSString).length
         return super.drawTitle(title.attributedSubstring(from: NSRange(location: 0, length: min(n, title.length))),
                                withFrame: frame, in: controlView)
     }

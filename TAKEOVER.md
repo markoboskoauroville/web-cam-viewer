@@ -1,6 +1,19 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
-**State 1.11.2026: v4 released, installed, on the page. Project closed.** (v2 notes below.)
+**State 13.11.2026: v5 = vertical slice (built by GitHub, not yet seen by Marko).** v4 was the last Mac build; since v5 the
+workflow `.github/workflows/build.yml` (from MANTRA_MANIFEST/workflows/mac-swift.yml; also makes the DMG the site needs) compiles on a push to main
+and releases v<N> (app.zip + MantraWebcamRecorder-<N>.dmg) as Latest. Nothing compiles on the Mac.
+
+**v5 (13.11.2026): vertical slice.** The camera menu lists every camera followed by "<camera> · vertical slice"; the Sony α7 V
+(ILCE) is first, as in the classroom. Closed menu shows "▯ " + 6 letters for a slice entry (the 8-letter rule would otherwise show
+the same text twice). `app/Slicer.swift`: the middle 9:16 of the frame at full height (3840x2160 → 1215x2160), Lanczos
+(CILanczosScaleTransform, halved first if the source is over 2x too big) to 1080x1920, new CMSampleBuffer with the original time
+stamps. The same buffers go to an AVSampleBufferDisplayLayer (preview, hidden when horizontal) and to the Recorder
+(`vertical:` → HEVC 1080x1920, 10 Mb/s; audio, tmcd, mb_ name unchanged). The window turns portrait (9:16, height ≥720 and within
+the screen) and goes back to its horizontal size; the choice is kept per camera (UserDefaults `slice.<uniqueID>`); a click on the
+vertical picture is mapped into the strip for the Sony touch focus. Horizontal mode is untouched. NOT verified by running (nothing
+compiled or opened on the Mac by order): first look = Marko's.
+Sources of 1080 height are scaled UP to 1920 (the classroom never scales up; here the file size is fixed).
 
 **1.11.2026, v2, released and published.** Renamed from Web Cam Viewer (Mantra) at Marko's word; bundle id kept.
 Requests word for word in momentaryupdates.md: the sound input and the VU, the record key (mb_ file, H.265 1080p 10 Mb/s),

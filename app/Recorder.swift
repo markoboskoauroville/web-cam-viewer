@@ -23,7 +23,7 @@ final class Recorder {
         return dir.appendingPathComponent("mb_\(f.string(from: Date())).mov")
     }
 
-    init(fps: Int32, audioFormat: CMFormatDescription?) throws {
+    init(fps: Int32, vertical: Bool = false, audioFormat: CMFormatDescription?) throws {
         self.fps = fps
         url = Self.newURL()
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -31,7 +31,7 @@ final class Recorder {
 
         video = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.hevc,
-            AVVideoWidthKey: 1920, AVVideoHeightKey: 1080,
+            AVVideoWidthKey: vertical ? Slicer.outW : 1920, AVVideoHeightKey: vertical ? Slicer.outH : 1080,   // v5: 1080×1920 for a vertical slice
             AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: 10_000_000,
