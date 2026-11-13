@@ -62,14 +62,18 @@ final class ApiServer {
     }
 
     private func handle(_ req: Request, _ c: NWConnection) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { self.route(req, c) }
+    }
+
+    private func route(_ req: Request, _ c: NWConnection) {
+        do {
             guard let v = self.viewer else { Self.send(c, 503, ["error": "closing"]); return }
             switch (req.method, req.path) {
             case ("GET", "/status"): Self.send(c, 200, v.apiStatus())
             case ("GET", "/cameras"): Self.send(c, 200, ["cameras": v.apiCameras()])
             case ("POST", "/camera"):
                 let r = v.apiSetCamera(name: req.body["name"] as? String, id: req.body["id"] as? String, slice: req.body["slice"] as? Bool)
-                Self.send(c, r.ok ? 200 : 404, r.ok ? v.apiStatus() : ["error": r.error])
+                if r.ok { Self.send(c, 200, v.apiStatus()) } else { Self.send(c, 404, ["error": r.error]) }
             case ("POST", "/record/start"):
                 v.apiStart(title: req.body["name"] as? String) { url, err in
                     if let url { var s = v.apiStatus(); s["path"] = url.path; Self.send(c, 200, s) }
@@ -77,7 +81,7 @@ final class ApiServer {
                 }
             case ("POST", "/record/stop"):
                 v.apiStop { path, dur, err in
-                    if let path { Self.send(c, 200, ["path": path, "duration": dur]) } else { Self.send(c, 409, ["error": err]) }
+                    if let path { Self.send(c, 200, ["path": path, "duration": dur] as [String: Any]) } else { Self.send(c, 409, ["error": err]) }
                 }
             case ("POST", "/front"): v.apiFront(); Self.send(c, 200, ["ok": true])
             default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "POST /camera", "POST /record/start", "POST /record/stop", "POST /front"]])
@@ -85,7 +89,7 @@ final class ApiServer {
         }
     }
 
-    private static func send(_ c: NWConnection, _ code: Int, _ obj: Any) {
+    private static func send(_ c: NWConnection, _ code: Int, _ obj: [String: Any]) {
         let body = (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data("{}".utf8)
         let text = code == 200 ? "OK" : code == 404 ? "Not Found" : code == 409 ? "Conflict" : "Error"
         var out = Data("HTTP/1.1 \(code) \(text)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)

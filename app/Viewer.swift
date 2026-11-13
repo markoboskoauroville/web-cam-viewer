@@ -779,7 +779,7 @@ extension Viewer {
         let vertical = current.map { savedSlice($0) } ?? false
         return ["camera": nn(current?.localizedName), "id": nn(current?.uniqueID), "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
-                "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : NSNull(),
+                "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
                 "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "1920x1080",
                 "levels": lastLevels.map { Double($0) }]
     }
