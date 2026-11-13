@@ -916,5 +916,17 @@ extension Viewer {
             if let r, r.failed == nil { done(r.url.path, dur, "") } else { done(nil, 0, r?.failed ?? "the take failed") }
         }
     }
+    /// v8: the picture full screen on the display with the menu bar (the BenQ), or back to the window
+    func apiFullscreen(_ on: Bool) -> Bool {
+        let isFull = window.styleMask.contains(.fullScreen)
+        if on {
+            if !isFull {
+                if let scr = NSScreen.screens.first { window.setFrame(scr.frame.insetBy(dx: 200, dy: 100), display: true) }
+                window.makeKeyAndOrderFront(nil)
+                window.toggleFullScreen(nil)
+            }
+        } else if isFull { window.toggleFullScreen(nil) }
+        return true
+    }
     func apiFront() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 }

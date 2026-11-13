@@ -14,7 +14,7 @@ import AVFoundation
 
 // v3: two VU hairlines, left and right channel, side by side on the left edge; the record key shows a see-through
 // red under the mouse.
-let VERSION = 7
+let VERSION = 8
 let NAME = "Webcam Recorder (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {
