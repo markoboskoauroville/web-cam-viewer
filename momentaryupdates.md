@@ -50,4 +50,4 @@ Marko: "this is in the lesson recorder. Also, make the slice view the same as in
 
 ## 13.11.2026: v6, a local HTTP API (MPA_LESSONS_ANALYZER request "Beatrice guides the shooting")
 Marko 13.11.2026: "Beatrice needs to guide me ... I say yes, and then it opens up the Sony webcam, and it records. I press stop"
-**Status:** saved first; building as v6 (127.0.0.1 only; /status /cameras /camera /record/start /record/stop /front).
+**Status (13.11.2026):** built as v6, 127.0.0.1:8867 (/status /cameras /camera /record/start /record/stop /front); not yet run by Marko.

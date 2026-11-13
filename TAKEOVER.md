@@ -4,6 +4,12 @@
 workflow `.github/workflows/build.yml` (from MANTRA_MANIFEST/workflows/mac-swift.yml; also makes the DMG the site needs) compiles on a push to main
 and releases v<N> (app.zip + MantraWebcamRecorder-<N>.dmg) as Latest. Nothing compiles on the Mac.
 
+**v6 (13.11.2026): local HTTP API on 127.0.0.1:8867** (app/ApiServer.swift, Network.framework, loopback only; port also in
+~/.mantra/ports/webcam-recorder). `GET /status` {camera, id, slice, recording, elapsed, lastTake, currentTake, fps, size, levels},
+`GET /cameras`, `POST /camera {"name"|"id","slice"}` (the menu's own action, remembered), `POST /record/start {"name"?}` (title goes
+after the mb_ stamp; 409 if already recording), `POST /record/stop` → {path, duration}, `POST /front`. Handlers call the same Viewer
+functions as the record key, so file, HEVC, time code and slice are identical. The app must be running. Not run by me (no Mac compile/open).
+
 **v5 (13.11.2026): vertical slice.** The camera menu lists every camera followed by "<camera> · vertical slice"; the Sony α7 V
 (ILCE) is first, as in the classroom. Closed menu shows "▯ " + 6 letters for a slice entry (the 8-letter rule would otherwise show
 the same text twice). `app/Slicer.swift`: the middle 9:16 of the frame at full height (3840x2160 → 1215x2160), Lanczos

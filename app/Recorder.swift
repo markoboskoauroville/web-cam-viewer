@@ -17,15 +17,18 @@ final class Recorder {
     private(set) var startTimecode = ""
     private(set) var failed: String?
 
-    static func newURL() -> URL {
+    /// ~/Movies/mb_<date>_<time>[_<title>].mov (v6: the API's take title, letters digits - _ only)
+    static func newURL(title: String? = nil) -> URL {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let dir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("mb_\(f.string(from: Date())).mov")
+        var t = (title ?? "").unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" ? String($0) : "_" }.joined()
+        t = String(t.prefix(60)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return dir.appendingPathComponent("mb_\(f.string(from: Date()))\(t.isEmpty ? "" : "_" + t).mov")
     }
 
-    init(fps: Int32, vertical: Bool = false, audioFormat: CMFormatDescription?) throws {
+    init(fps: Int32, vertical: Bool = false, title: String? = nil, audioFormat: CMFormatDescription?) throws {
         self.fps = fps
-        url = Self.newURL()
+        url = Self.newURL(title: title)
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
 

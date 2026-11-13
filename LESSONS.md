@@ -40,3 +40,6 @@
     need no change. The display layer needs DisplayImmediately on each buffer (no timebase). No Mac compile: GitHub only.
 17. **A GitHub-made release must carry the DMG** (the Site action runs on "release published" and needs exactly one .dmg):
     build.yml creates the release with app.zip and the DMG in one call; make_dmg.sh and build.sh honour SIGN=- (runner).
+18. **API = the same functions as the UI (v6):** ApiServer only parses HTTP and hops to the main queue; start/stop/camera call
+    startRecording/stopRecording/applyMode, so a take from the API cannot differ from one made with the key. Loopback is enforced
+    with requiredLocalEndpoint 127.0.0.1. Releases made with the workflow token do not trigger Site: dispatch it after.

@@ -46,6 +46,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // v5: every camera is followed by its "· vertical slice" entry; an entry is (camera index, slice?)
     private var entries: [(device: Int, slice: Bool)] = []
     private let slicer = Slicer()
+    private var api: ApiServer?
+    private var recStart: Date?
+    private var lastTake: String?
+    private var currentTake: String?
+    private var lastLevels: [Float] = []
     private let sliceLayer = AVSampleBufferDisplayLayer()
     private var sliceOn = false                        // capture queue
     private var horizontalSize: NSSize?                // the window's size before a slice, to go back to
@@ -90,6 +95,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
         startSony()
+        api = ApiServer(viewer: self); api?.start()
         // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
         // have held it when it was chosen)
         watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkFrames() }
@@ -399,6 +405,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
+        api?.stop()
         keepStreaming.stop()
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
@@ -609,14 +616,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     @objc func toggleRecord() { isRecording ? stopRecording() : startRecording() }
 
-    func startRecording(_ started: ((URL?) -> Void)? = nil) {
+    func startRecording(title: String? = nil, _ started: ((URL?) -> Void)? = nil) {
         guard current != nil, cameraAllowed else { say("No camera to record."); started?(nil); return }
         let fps = self.fps
         captureQueue.async {
             do {
-                let r = try Recorder(fps: fps, vertical: self.sliceOn, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
+                let r = try Recorder(fps: fps, vertical: self.sliceOn, title: title, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
                 self.recorder = r
-                DispatchQueue.main.async { self.recordingStarted(fps: fps); started?(r.url) }
+                DispatchQueue.main.async { self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
             } catch {
                 DispatchQueue.main.async { self.say("Cannot record:\n\(error.localizedDescription)"); started?(nil) }
             }
@@ -651,6 +658,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         captureQueue.sync { r = recorder; recorder = nil }
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
+            self.lastTake = r.url.path; self.currentTake = nil
             if let f = r.failed { self.say("The take failed:\n\(f)") }
             done?(r)
         } }
@@ -663,7 +671,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
             recorder?.appendAudio(sb)
             let rms = Meter.rms(sb)
-            DispatchQueue.main.async { self.meter.setLevels(rms) }
+            DispatchQueue.main.async { self.lastLevels = rms; self.meter.setLevels(rms) }
         } else {
             liveFrames &+= 1
             if sliceOn, let v = slicer.slice(sb) {
@@ -760,4 +768,55 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if first { return }
         DispatchQueue.main.async { self.lumas.append(l) }
     }
+}
+
+// MARK: v6, the local API (ApiServer.swift): the same functions as the window and the record key
+private func nn(_ x: Any?) -> Any { x ?? NSNull() }
+
+extension Viewer {
+    func apiStatus() -> [String: Any] {
+        let rec = isRecording
+        let vertical = current.map { savedSlice($0) } ?? false
+        return ["camera": nn(current?.localizedName), "id": nn(current?.uniqueID), "slice": vertical,
+                "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
+                "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : NSNull(),
+                "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "1920x1080",
+                "levels": lastLevels.map { Double($0) }]
+    }
+    func apiCameras() -> [[String: Any]] {
+        devices.map { ["name": $0.localizedName, "id": $0.uniqueID, "slice": savedSlice($0),
+                       "current": $0.uniqueID == current?.uniqueID, "sony": KeepStreaming.isSony($0)] }
+    }
+    /// the menu's own action: camera by id or name (exact, then containing, case-insensitive), slice or not (else as remembered)
+    func apiSetCamera(name: String?, id: String?, slice: Bool?) -> (ok: Bool, error: String) {
+        refreshIfNeeded()
+        var i: Int?
+        if let id { i = devices.firstIndex { $0.uniqueID == id } }
+        else if let name, !name.isEmpty {
+            let n = name.lowercased()
+            i = devices.firstIndex { $0.localizedName.lowercased() == n } ?? devices.firstIndex { $0.localizedName.lowercased().contains(n) }
+        } else { i = current.flatMap { c in devices.firstIndex { $0.uniqueID == c.uniqueID } } }
+        guard let i else { return (false, "no such camera") }
+        let want = slice ?? savedSlice(devices[i])
+        UserDefaults.standard.set(devices[i].uniqueID, forKey: "camera")
+        UserDefaults.standard.set(want, forKey: Self.sliceKey(devices[i]))
+        popup.selectItem(at: entryIndex(i, slice: want))
+        if current?.uniqueID == devices[i].uniqueID { if isRecording { stopRecording() }; applyMode(want) }
+        else { select(devices[i]) }
+        return (true, "")
+    }
+    private func refreshIfNeeded() { if devices.isEmpty { devicesChanged() } }
+    /// the record key's own start; `title` goes after the mb_ time stamp in the file name
+    func apiStart(title: String?, _ done: @escaping (URL?, String) -> Void) {
+        if isRecording { done(nil, "already recording"); return }
+        startRecording(title: title) { url in done(url, url == nil ? "cannot record (no camera, or no permission)" : "") }
+    }
+    func apiStop(_ done: @escaping (String?, Double, String) -> Void) {
+        guard isRecording else { done(nil, 0, "not recording"); return }
+        let dur = Date().timeIntervalSince(recStart ?? Date())
+        stopRecording { r in
+            if let r, r.failed == nil { done(r.url.path, dur, "") } else { done(nil, 0, r?.failed ?? "the take failed") }
+        }
+    }
+    func apiFront() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 }
