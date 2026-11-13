@@ -51,3 +51,7 @@ Marko: "this is in the lesson recorder. Also, make the slice view the same as in
 ## 13.11.2026: v6, a local HTTP API (MPA_LESSONS_ANALYZER request "Beatrice guides the shooting")
 Marko 13.11.2026: "Beatrice needs to guide me ... I say yes, and then it opens up the Sony webcam, and it records. I press stop"
 **Status (13.11.2026):** built as v6, 127.0.0.1:8867 (/status /cameras /camera /record/start /record/stop /front); not yet run by Marko.
+
+## 13.11.2026: camera and sound choice on a click; wait for the same camera
+Marko: "Please upgrade the webcam recorder so that when it's in a full screen or any screen, when I click on the image, I want to see a choice of the camera and a choice of the sound. That's what I want with the web thing. If I unplug some camera, I don't want that. This goes to another camera. It waits, and if the same camera is plugged in again, it continues playing."
+**Status:** saved first (read as: v7: a click on the picture (any size, full screen too) opens an overlay with the CAMERA list (each with its vertical slice) and the SOUND input list, like the classroom page's menu; an unplugged camera never falls over to another one: the picture shows "Waiting for <camera>…", and when the same camera (same unique id) comes back it continues by itself.)
