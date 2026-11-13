@@ -47,6 +47,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var entries: [(device: Int, slice: Bool)] = []
     private let slicer = Slicer()
     private var api: ApiServer?
+    // v7: the chosen camera is kept by its unique id (and model name) even while it is unplugged: no falling over to another one
+    private var wantedID: String? = UserDefaults.standard.string(forKey: "camera")
+    private var wantedName: String? = UserDefaults.standard.string(forKey: "cameraName")
+    private var waiting = false                 // the chosen camera is not there
+    private var micWaiting = false              // the chosen sound input is not there
+    private var interrupted = false             // the last take ended because the camera or the sound went away
+    private let overlay = ChoiceOverlay()
     private var recStart: Date?
     private var lastTake: String?
     private var currentTake: String?
@@ -92,6 +99,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureDevice.wasConnectedNotification, object: nil)
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureDevice.wasDisconnectedNotification, object: nil)
+        nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureSession.wasInterruptedNotification, object: nil)
+        nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureSession.interruptionEndedNotification, object: nil)
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
         startSony()
@@ -164,7 +173,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func sonyFocus() { sony.focus() }
 
     @objc private func pictureClicked(_ g: NSClickGestureRecognizer) {
-        guard sony.ready else { return }
+        // v7: a click opens the camera and sound choice; Option-click is the touch focus on the Sony (v4)
+        if !NSEvent.modifierFlags.contains(.option) || !sony.ready { showChoice(); return }
         let p = g.location(in: picture)
         if !sliceLayer.isHidden {    // v5: a point on the vertical picture is a point inside the middle strip of the frame
             let r = AVMakeRect(aspectRatio: CGSize(width: Slicer.outW, height: Slicer.outH), insideRect: picture.bounds)
@@ -181,6 +191,55 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let d = preview.captureDevicePointConverted(fromLayerPoint: lp)
         guard (0...1).contains(d.x), (0...1).contains(d.y) else { return }
         sony.touch(nx: d.x, ny: d.y)
+    }
+
+    // MARK: v7, the choice on a click
+
+    private func showChoice() {
+        guard overlay.isHidden else { overlay.close(); return }
+        var cams: [ChoiceOverlay.Row] = []
+        for (i, d) in devices.enumerated() {
+            for slice in [false, true] {
+                let cur = d.uniqueID == wantedID && savedSlice(d) == slice
+                cams.append(ChoiceOverlay.Row(title: d.localizedName + (slice ? Self.sliceSuffix : ""), current: cur,
+                                  action: { [weak self] in self?.chooseCamera(i, slice: slice) }))
+            }
+        }
+        if cams.isEmpty { cams.append(ChoiceOverlay.Row(title: "No camera", current: false, action: {})) }
+        let sid = UserDefaults.standard.bool(forKey: "nosound") ? nil : UserDefaults.standard.string(forKey: "sound")
+        var snd: [ChoiceOverlay.Row] = []
+        for (i, m) in mics.enumerated() {
+            snd.append(ChoiceOverlay.Row(title: m.localizedName, current: m.uniqueID == sid, action: { [weak self] in self?.chooseMic(i) }))
+        }
+        snd.append(ChoiceOverlay.Row(title: "No sound", current: sid == nil, action: { [weak self] in self?.chooseMic(nil) }))
+        overlay.show(cameras: cams, sounds: snd)
+    }
+
+    /// the one way a camera is chosen (menu, overlay, API): remembered by id and name, slice remembered per camera
+    private func chooseCamera(_ i: Int, slice: Bool) {
+        guard i >= 0, i < devices.count else { return }
+        let d = devices[i]
+        wantedID = d.uniqueID; wantedName = d.localizedName
+        UserDefaults.standard.set(d.uniqueID, forKey: "camera")
+        UserDefaults.standard.set(d.localizedName, forKey: "cameraName")
+        UserDefaults.standard.set(slice, forKey: Self.sliceKey(d))
+        popup.selectItem(at: entryIndex(i, slice: slice))
+        if current?.uniqueID == d.uniqueID && !waiting {   // the same camera: only the picture changes, the camera stays open
+            if isRecording { stopRecording() }
+            applyMode(slice)
+        } else { select(d) }
+    }
+
+    private func chooseMic(_ i: Int?) {
+        if let i, i >= 0, i < mics.count {
+            UserDefaults.standard.set(false, forKey: "nosound")
+            micPopup.selectItem(at: i)
+            selectMic(mics[i])
+        } else {
+            UserDefaults.standard.set(true, forKey: "nosound")
+            micPopup.selectItem(at: mics.count)
+            selectMic(nil)
+        }
     }
 
     // MARK: the window
@@ -303,6 +362,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         content.addSubview(timecode)
 
         content.addSubview(bar)   // last: over the picture
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(overlay, positioned: .below, relativeTo: bar)   // the bar stays usable over it
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: content.topAnchor), overlay.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            overlay.leadingAnchor.constraint(equalTo: content.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
         overlays = [bar]   // v4: full screen keeps the meters and the REC time code (Marko, 1.11.2026)
 
         let nc = NotificationCenter.default
@@ -312,6 +376,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             guard let self, e.window === self.window else { return e }
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if e.keyCode == 53, !self.overlay.isHidden { self.overlay.close(); return nil }   // Escape closes the choice
             if e.keyCode == 53, self.isFull { self.toggleFull(); return nil }   // Escape
             return e
         }
@@ -474,16 +539,35 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             : "The microphone is not allowed: opens Privacy & Security → Microphone"
 
         devices = Cameras.all()
-        if devices.isEmpty {
-            popup.removeAllItems(); popup.addItem(withTitle: "No camera"); popup.isEnabled = false
-            select(nil)
-        } else {
+        // v7: the chosen camera went away while a take runs: the take is stopped and saved, and says so
+        if let c = current, isRecording, !devices.contains(where: { $0.uniqueID == c.uniqueID }) { stopRecording(); interrupted = true }
+        if devices.isEmpty { popup.removeAllItems(); popup.addItem(withTitle: "No camera") } else { fillCameras() }
+        var found: Int?
+        if let id = wantedID {
+            found = devices.firstIndex { $0.uniqueID == id }
+            if found == nil, let n = wantedName, let f = devices.firstIndex(where: { $0.localizedName == n }) {
+                // the same model under a new id: it is the same camera; its slice choice moves with it
+                found = f
+                UserDefaults.standard.set(UserDefaults.standard.bool(forKey: "slice." + id), forKey: Self.sliceKey(devices[f]))
+                wantedID = devices[f].uniqueID
+                UserDefaults.standard.set(wantedID, forKey: "camera")
+            }
+        } else if !devices.isEmpty {                       // the very first start: the first camera in the list
+            found = 0; wantedID = devices[0].uniqueID
+            UserDefaults.standard.set(wantedID, forKey: "camera")
+        }
+        if let f = found {
+            waiting = false
             popup.isEnabled = true
-            fillCameras()
-            let remembered = current?.uniqueID ?? UserDefaults.standard.string(forKey: "camera")
-            let i = devices.firstIndex { $0.uniqueID == remembered } ?? 0
-            popup.selectItem(at: entryIndex(i, slice: savedSlice(devices[i])))
-            if current?.uniqueID != devices[i].uniqueID || !session.isRunning { select(devices[i]) }
+            wantedName = devices[f].localizedName
+            UserDefaults.standard.set(wantedName, forKey: "cameraName")
+            popup.selectItem(at: entryIndex(f, slice: savedSlice(devices[f])))
+            if current?.uniqueID != devices[f].uniqueID || !session.isRunning { select(devices[f]) }
+        } else if wantedID != nil {
+            enterWaiting()
+        } else {
+            popup.isEnabled = false
+            select(nil)
         }
 
         // the sound: every input, then "No sound"; the first time the Mac's own default input
@@ -491,44 +575,62 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         fill(micPopup, mics)
         micPopup.addItem(withTitle: "No sound")
         let noSound = UserDefaults.standard.bool(forKey: "nosound")
-        let rememberedMic = currentMic?.uniqueID ?? UserDefaults.standard.string(forKey: "sound") ?? AVCaptureDevice.default(for: .audio)?.uniqueID
-        if noSound || mics.isEmpty {
+        let ud = UserDefaults.standard
+        let savedMic = ud.string(forKey: "sound")
+        if noSound || (mics.isEmpty && savedMic == nil) {
+            micWaiting = false
             micPopup.selectItem(at: mics.count)
             if currentMic != nil || audioIn != nil { selectMic(nil) }
         } else {
-            let i = mics.firstIndex { $0.uniqueID == rememberedMic } ?? 0
-            micPopup.selectItem(at: i)
-            if currentMic?.uniqueID != mics[i].uniqueID || audioIn == nil { selectMic(mics[i]) }
+            // v7: the chosen input by id, else the same model name; if it is not there the sound waits for it (no other input)
+            var mi: Int?
+            if let id = savedMic ?? currentMic?.uniqueID {
+                mi = mics.firstIndex { $0.uniqueID == id }
+                if mi == nil, let n = ud.string(forKey: "soundName") { mi = mics.firstIndex { $0.localizedName == n } }
+            } else if let d = AVCaptureDevice.default(for: .audio) { mi = mics.firstIndex { $0.uniqueID == d.uniqueID } }
+            if let mi {
+                micWaiting = false
+                micPopup.selectItem(at: mi)
+                if currentMic?.uniqueID != mics[mi].uniqueID || audioIn == nil { selectMic(mics[mi]) }
+            } else if savedMic != nil {
+                micWaiting = true
+                micPopup.selectItem(at: -1)
+                if isRecording, currentMic != nil { interrupted = true }
+                if currentMic != nil || audioIn != nil { selectMic(nil) }
+            } else {
+                micPopup.selectItem(at: mics.count)
+            }
         }
+    }
+
+    /// v7: the chosen camera is not connected: keep its id, show a dark frame with the message, never another camera
+    private func enterWaiting() {
+        waiting = true
+        current = nil
+        queue.async { if let v = self.videoIn { self.session.beginConfiguration(); self.session.removeInput(v); self.videoIn = nil; self.session.commitConfiguration() } }
+        preview.isHidden = true; sliceLayer.isHidden = true; sliceLayer.flushAndRemoveImage()
+        popup.isEnabled = !devices.isEmpty
+        popup.selectItem(at: -1)
+        say("Waiting for \(wantedName ?? "the camera")…")
+        updateSonyBar()
+        holdSony()
     }
 
     @objc private func picked() {
         let e = popup.indexOfSelectedItem
         guard e >= 0, e < entries.count else { return }
-        let (i, slice) = entries[e]
-        UserDefaults.standard.set(devices[i].uniqueID, forKey: "camera")
-        UserDefaults.standard.set(slice, forKey: Self.sliceKey(devices[i]))   // remembered per camera
-        if current?.uniqueID == devices[i].uniqueID {      // the same camera: only the picture changes, the camera stays open
-            if isRecording { stopRecording() }
-            applyMode(slice)
-        } else { select(devices[i]) }
+        chooseCamera(entries[e].device, slice: entries[e].slice)
     }
 
     @objc private func pickedMic() {
         let i = micPopup.indexOfSelectedItem
-        if i >= 0, i < mics.count {
-            UserDefaults.standard.set(mics[i].uniqueID, forKey: "sound")
-            UserDefaults.standard.set(false, forKey: "nosound")
-            selectMic(mics[i])
-        } else {
-            UserDefaults.standard.set(true, forKey: "nosound")
-            selectMic(nil)
-        }
+        chooseMic(i >= 0 && i < mics.count ? i : nil)
     }
 
     private func select(_ device: AVCaptureDevice?) {
         if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
+        waiting = false
         applyMode(device.map { savedSlice($0) } ?? false)
         updateSonyBar()
         holdSony()
@@ -596,6 +698,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func selectMic(_ device: AVCaptureDevice?) {
         if isRecording { stopRecording() }
         currentMic = device
+        if let device { UserDefaults.standard.set(device.uniqueID, forKey: "sound"); UserDefaults.standard.set(device.localizedName, forKey: "soundName") }
         meter.dead = device == nil || !micAllowed
         queue.async {
             self.session.beginConfiguration()
@@ -623,7 +726,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             do {
                 let r = try Recorder(fps: fps, vertical: self.sliceOn, title: title, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
                 self.recorder = r
-                DispatchQueue.main.async { self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
+                DispatchQueue.main.async { self.interrupted = false; self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
             } catch {
                 DispatchQueue.main.async { self.say("Cannot record:\n\(error.localizedDescription)"); started?(nil) }
             }
@@ -776,8 +879,8 @@ private func nn(_ x: Any?) -> Any { x ?? NSNull() }
 extension Viewer {
     func apiStatus() -> [String: Any] {
         let rec = isRecording
-        let vertical = current.map { savedSlice($0) } ?? false
-        return ["camera": nn(current?.localizedName), "id": nn(current?.uniqueID), "slice": vertical,
+        let vertical = wantedID.map { UserDefaults.standard.bool(forKey: "slice." + $0) } ?? false
+        return ["camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
                 "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "1920x1080",
@@ -797,12 +900,7 @@ extension Viewer {
             i = devices.firstIndex { $0.localizedName.lowercased() == n } ?? devices.firstIndex { $0.localizedName.lowercased().contains(n) }
         } else { i = current.flatMap { c in devices.firstIndex { $0.uniqueID == c.uniqueID } } }
         guard let i else { return (false, "no such camera") }
-        let want = slice ?? savedSlice(devices[i])
-        UserDefaults.standard.set(devices[i].uniqueID, forKey: "camera")
-        UserDefaults.standard.set(want, forKey: Self.sliceKey(devices[i]))
-        popup.selectItem(at: entryIndex(i, slice: want))
-        if current?.uniqueID == devices[i].uniqueID { if isRecording { stopRecording() }; applyMode(want) }
-        else { select(devices[i]) }
+        chooseCamera(i, slice: slice ?? savedSlice(devices[i]))
         return (true, "")
     }
     private func refreshIfNeeded() { if devices.isEmpty { devicesChanged() } }

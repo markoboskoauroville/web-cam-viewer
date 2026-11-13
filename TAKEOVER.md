@@ -4,6 +4,15 @@
 workflow `.github/workflows/build.yml` (from MANTRA_MANIFEST/workflows/mac-swift.yml; also makes the DMG the site needs) compiles on a push to main
 and releases v<N> (app.zip + MantraWebcamRecorder-<N>.dmg) as Latest. Nothing compiles on the Mac.
 
+**v7 (13.11.2026): choice on a click, wait for the same camera.** `app/ChoiceOverlay.swift`: a click on the picture (windowed or
+full screen; Option-click is still the Sony touch focus) opens a see-through layer under the bar with CAMERA (each camera, then
+"· vertical slice") and SOUND (inputs, No sound); the current one is green and ticked; a blob picks, a click outside or Esc closes.
+Camera, overlay and API all go through `chooseCamera`/`chooseMic`. Never falls over: the chosen camera is kept by uniqueID and model
+name (UserDefaults camera, cameraName); unplugged → "Waiting for <name>…" on black, `/status` "waiting": true; on wasConnected
+the same id (or same model name, slice choice moved to the new id) restarts the session with its slice. Same for the sound input
+("soundWaiting"). A take running at the disconnect is stopped and saved; `/status` lastTake + "interrupted": true until the next take.
+Not run by me.
+
 **v6 (13.11.2026): local HTTP API on 127.0.0.1:8867** (app/ApiServer.swift, Network.framework, loopback only; port also in
 ~/.mantra/ports/webcam-recorder). `GET /status` {camera, id, slice, recording, elapsed, lastTake, currentTake, fps, size, levels},
 `GET /cameras`, `POST /camera {"name"|"id","slice"}` (the menu's own action, remembered), `POST /record/start {"name"?}` (title goes

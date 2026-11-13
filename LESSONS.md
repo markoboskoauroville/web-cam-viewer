@@ -43,3 +43,6 @@
 18. **API = the same functions as the UI (v6):** ApiServer only parses HTTP and hops to the main queue; start/stop/camera call
     startRecording/stopRecording/applyMode, so a take from the API cannot differ from one made with the key. Loopback is enforced
     with requiredLocalEndpoint 127.0.0.1. Releases made with the workflow token do not trigger Site: dispatch it after.
+19. **A chosen device is an identity, not a list position (v7):** v6 fell over to FaceTime when the Sony was unplugged because
+    refresh() took index 0 when the remembered id was missing. Keep the id and the model name, wait, never substitute; the
+    same for the microphone. A click that must open a menu steals the old click (touch focus): the old one moved to Option-click.
