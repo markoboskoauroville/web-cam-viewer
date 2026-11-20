@@ -43,7 +43,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
     private let feedStats = NSTextField(labelWithString: "")
-    private var feedStatsTop: NSLayoutConstraint!
     private var devices: [AVCaptureDevice] = []
     // v5: every camera is followed by its "· vertical slice" entry; an entry is (camera index, slice?)
     private var entries: [(device: Int, slice: Bool)] = []
@@ -310,7 +309,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
         sonyBar.isHidden = true   // only while a Sony is connected
-        let group = NSStackView(views: [popup, micPopup, recKey, sonyBar])
+        let group = NSStackView(views: [popup, micPopup, recKey, feedStats, sonyBar])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -378,16 +377,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         timecode.setAccessibilityIdentifier("timecode")
         content.addSubview(timecode)
 
-        // Live input facts: below the normal bar, and at the top in full screen.
+        // Live input facts beside the record key, in the dark input bar.
         feedStats.translatesAutoresizingMaskIntoConstraints = false
         feedStats.isHidden = true
-        feedStats.alignment = .right
+        feedStats.alignment = .left
         feedStats.lineBreakMode = .byClipping
         feedStats.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
         feedStats.textColor = NSColor.white.withAlphaComponent(0.86)
-        feedStats.shadow = sh
         feedStats.setAccessibilityIdentifier("video-stats")
-        content.addSubview(feedStats)
+        feedStats.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         content.addSubview(bar)   // last: over the picture
         overlay.translatesAutoresizingMaskIntoConstraints = false
@@ -445,17 +443,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             timecode.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             timecode.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
 
-            feedStats.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            feedStats.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 12),
-
             message.centerXAnchor.constraint(equalTo: picture.centerXAnchor),
             message.centerYAnchor.constraint(equalTo: picture.centerYAnchor),
             message.widthAnchor.constraint(lessThanOrEqualTo: picture.widthAnchor, constant: -32),
         ])
         meterTop = meter.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
         meterTop.isActive = true
-        feedStatsTop = feedStats.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 7)
-        feedStatsTop.isActive = true
         NotificationCenter.default.addObserver(self, selector: #selector(layoutPreview), name: NSView.frameDidChangeNotification, object: picture)
         picture.postsFrameChangedNotifications = true
 
@@ -494,13 +487,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
         meterTop.constant = 0   // the meters the whole height
-        feedStatsTop.constant = 7
         NSCursor.setHiddenUntilMouseMoves(true)
     }
     @objc private func leftFull() {
         overlays.forEach { $0.isHidden = false }
         meterTop.constant = Self.barHeight
-        feedStatsTop.constant = Self.barHeight + 7
     }
 
     /// stops a running take cleanly (the file is closed), then the session

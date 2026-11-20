@@ -8,7 +8,7 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
   menu · ● record, in the top middle; the full-screen key (four corners) and ✕ at the top right.
 - **Video input statistics** appear at the top while both a camera and a sound input are active: negotiated resolution,
   target FPS, pixel format and dropped frames. If the feed falls behind, its live FPS appears beside the target in amber.
-  The strip stays at the top in full screen.
+  The line sits inside the dark input bar, immediately beside the record key.
 - **Two VU hairlines** down the left edge, left and right channel, 2 pt each and touching (v4), the meter of Mantra Manual
   Camera: dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
 - **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.

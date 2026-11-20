@@ -61,3 +61,8 @@ Marko: "Please update my application. We call it Webcam Recorder Mantra. I need 
 **Status (20.11.2026): built as v9.** The live strip shows resolution, target FPS, live FPS when degraded, pixel format and
 dropped frames only while camera and sound are both active; it remains at the top in full screen and is exposed through the
 local `/status` API.
+
+## 20.11.2026: statistics corrected into the dark top bar
+Marko: "You need to move the status line and the top bar dark bar next to the record button. That was the original request."
+**Status (20.11.2026): corrected in v10.** The statistics line is immediately after the record key inside the dark input
+bar; the separate overlay below the bar is removed.
