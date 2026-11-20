@@ -1,73 +1,188 @@
 import AVFoundation
+import CoreVideo
+import Darwin
 import VideoToolbox
 
-// A take: ~/Movies/mb_<date>_<time>.mov, H.265 1920×1080 at 10 Mb/s, AAC, and a QuickTime time code track whose start
-// is the real-time clock of the first frame (Marko, 1.11.2026: "Time code must be there, which is exactly the real-time
-// clock"; MANTRA_MANIFEST modules/timecode.md). QuickTime .mov because it carries a tmcd track that Resolve reads.
-// Written in one-second fragments, so a crash loses a second, not the take (recorder.md §2).
+enum RecordQuality: String, CaseIterable {
+    case low, mid, high
+
+    var title: String { rawValue.uppercased() }
+    var baselineMbps: Double {
+        switch self { case .low: return 10; case .mid: return 25; case .high: return 50 }
+    }
+
+    /// LOW / MID / HIGH are defined at 1920×1080 and 30 FPS, then scale by pixels and frame rate.
+    func bitrate(width: Int, height: Int, fps: Int32) -> Int {
+        let scale = (Double(width * height) / (1920 * 1080)) * (Double(fps) / 30)
+        return max(1_000_000, Int((baselineMbps * 1_000_000 * scale).rounded()))
+    }
+}
+
+/*
+ * The crash-safe helper-process muxing design is adapted from OBS Studio's
+ * plugins/obs-ffmpeg/ffmpeg-mux (local OBS source, commit 48b876374).
+ *
+ * Copyright (c) 2023 Lain Bailey <lain@obsproject.com>
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+// The final MKV exists from the first frame. Like OBS's ffmpeg-mux helper, a separate process continuously drains
+// encoded packets into Matroska. Clusters are flushed every second, with no post-stop remux.
 final class Recorder {
     let url: URL
     let fps: Int32
-    private let writer: AVAssetWriter
-    private let video: AVAssetWriterInput
-    private let audio: AVAssetWriterInput?
-    private let tc: AVAssetWriterInput
+    let quality: RecordQuality
+    let width: Int
+    let height: Int
+    let bitrate: Int
+    private let process: Process
+    private let videoPipe = Pipe()
+    private let errors = Pipe()
+    private let audioFIFO: String?
+    private var audioHandle: FileHandle?
+    private let audioLock = NSLock()
+    private let audioWriterQueue = DispatchQueue(label: "webcamviewer.audioWriter", qos: .userInitiated)
+    private var compressionSession: VTCompressionSession?
+    private var wroteEncodedHeader = false
+    private var finishing = false
     private var started = false
     private(set) var startClock: Date?
     private(set) var startTimecode = ""
     private(set) var failed: String?
 
-    /// ~/Movies/mb_<date>_<time>[_<title>].mov (v6: the API's take title, letters digits - _ only)
     static func newURL(title: String? = nil) -> URL {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let dir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
         var t = (title ?? "").unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" ? String($0) : "_" }.joined()
         t = String(t.prefix(60)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        return dir.appendingPathComponent("mb_\(f.string(from: Date()))\(t.isEmpty ? "" : "_" + t).mov")
+        return dir.appendingPathComponent("mb_\(f.string(from: Date()))\(t.isEmpty ? "" : "_" + t).mkv")
     }
 
-    init(fps: Int32, vertical: Bool = false, title: String? = nil, audioFormat: CMFormatDescription?) throws {
+    init(fps: Int32, width: Int, height: Int, quality: RecordQuality,
+         vertical: Bool, title: String? = nil, audioFormat description: CMFormatDescription?) throws {
         self.fps = fps
+        self.quality = quality
+        self.width = width
+        self.height = height
+        self.bitrate = quality.bitrate(width: width, height: height, fps: fps)
         url = Self.newURL(title: title)
-        writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
 
-        video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.hevc,
-            AVVideoWidthKey: vertical ? Slicer.outW : 1920, AVVideoHeightKey: vertical ? Slicer.outH : 1080,   // v5: 1080×1920 for a vertical slice
-            AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 10_000_000,
-                AVVideoExpectedSourceFrameRateKey: fps,
-                AVVideoMaxKeyFrameIntervalKey: Int(fps) * 2,
-                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel as String,
-            ],
-        ])
-        video.expectsMediaDataInRealTime = true
-        writer.add(video)
+        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        guard let ffmpeg else { throw NSError(domain: "Recorder", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "ffmpeg is not installed; cannot create a crash-safe MKV"]) }
 
-        if let af = audioFormat, let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(af)?.pointee {
-            let ch = min(2, max(1, Int(asbd.mChannelsPerFrame)))
-            let a = AVAssetWriterInput(mediaType: .audio, outputSettings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: ch,
-                AVEncoderBitRateKey: ch == 2 ? 256_000 : 160_000,
-            ], sourceFormatHint: af)
-            a.expectsMediaDataInRealTime = true
-            writer.add(a); audio = a
-        } else { audio = nil }
+        let stamp = Date()
+        startClock = stamp
+        startTimecode = Self.timecode(stamp, fps: fps).text
 
-        var tcf: CMTimeCodeFormatDescription?
-        CMTimeCodeFormatDescriptionCreate(allocator: nil, timeCodeFormatType: kCMTimeCodeFormatType_TimeCode32,
-            frameDuration: CMTime(value: 1, timescale: fps), frameQuanta: UInt32(fps),
-            flags: kCMTimeCodeFlag_24HourMax, extensions: nil, formatDescriptionOut: &tcf)
-        tc = AVAssetWriterInput(mediaType: .timecode, outputSettings: nil, sourceFormatHint: tcf)
-        tc.expectsMediaDataInRealTime = true
-        writer.add(tc)
-        video.addTrackAssociation(withTrackOf: tc, type: AVAssetTrack.AssociationType.timecode.rawValue)
-        guard writer.startWriting() else { throw writer.error ?? NSError(domain: "Recorder", code: 1) }
+        var rawAudioFormat: String?
+        var rawAudioRate: Int?
+        var rawAudioChannels: Int?
+        var fifo: String?
+        if let description, let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee {
+            let channels = max(1, min(2, Int(asbd.mChannelsPerFrame)))
+            let bits = Int(asbd.mBitsPerChannel)
+            let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+            let format: String
+            if isFloat, bits == 32 { format = "f32le" }
+            else if !isFloat, bits == 16 { format = "s16le" }
+            else if !isFloat, bits == 32 { format = "s32le" }
+            else { throw NSError(domain: "Recorder", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "unsupported microphone sample format"]) }
+            let path = FileManager.default.temporaryDirectory
+                .appendingPathComponent("webcam-recorder-\(UUID().uuidString).audio").path
+            guard mkfifo(path, S_IRUSR | S_IWUSR) == 0 else {
+                throw NSError(domain: "Recorder", code: 4,
+                              userInfo: [NSLocalizedDescriptionKey: "cannot create the audio input pipe"])
+            }
+            fifo = path
+            rawAudioFormat = format
+            rawAudioRate = Int(asbd.mSampleRate)
+            rawAudioChannels = channels
+        }
+        audioFIFO = fifo
+        process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpeg)
+        var args = [
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-thread_queue_size", "1024",
+            "-f", "h264", "-r", "\(fps)", "-i", "pipe:0",
+        ]
+        if let fifo, let rawAudioFormat, let rawAudioRate, let rawAudioChannels {
+            args += [
+                "-thread_queue_size", "1024",
+                "-f", rawAudioFormat, "-ar", "\(rawAudioRate)", "-ac", "\(rawAudioChannels)", "-i", fifo,
+            ]
+        }
+        args += [
+            "-map", "0:v:0",
+        ]
+        if fifo != nil { args += ["-map", "1:a:0"] }
+        args += [
+            "-c:v", "copy",
+        ]
+        if fifo != nil { args += ["-c:a", "aac", "-b:a", "256k"] }
+        args += [
+            "-metadata", "timecode=\(startTimecode)",
+            "-f", "matroska", "-cluster_time_limit", "1000",
+            "-flush_packets", "1",
+            url.path,
+        ]
+        process.arguments = args
+        process.standardInput = videoPipe
+        process.standardError = errors
+        try process.run()
+        if let fifo {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let handle = FileHandle(forWritingAtPath: fifo)
+                self?.audioLock.lock()
+                self?.audioHandle = handle
+                self?.audioLock.unlock()
+            }
+        }
+        try createEncoder()
     }
 
-    /// the wall clock of a capture time stamp (the host clock): now − (host now − pts)
+    private func createEncoder() throws {
+        var session: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: kCFAllocatorDefault, width: Int32(width), height: Int32(height),
+            codecType: kCMVideoCodecType_H264, encoderSpecification: nil, imageBufferAttributes: nil,
+            compressedDataAllocator: nil, outputCallback: Self.encodedFrame,
+            refcon: Unmanaged.passUnretained(self).toOpaque(), compressionSessionOut: &session)
+        guard status == noErr, let session else {
+            throw NSError(domain: "Recorder", code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "cannot create the H.264 encoder"])
+        }
+        compressionSession = session
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as NSNumber)
+        let bitrateStatus = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ConstantBitRate,
+                                                value: bitrate as NSNumber)
+        guard bitrateStatus == noErr else {
+            throw NSError(domain: "Recorder", code: Int(bitrateStatus),
+                          userInfo: [NSLocalizedDescriptionKey: "H.264 constant bitrate is not supported"])
+        }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: max(1, Int(fps) * 2) as NSNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        let ready = VTCompressionSessionPrepareToEncodeFrames(session)
+        guard ready == noErr else {
+            throw NSError(domain: "Recorder", code: Int(ready),
+                          userInfo: [NSLocalizedDescriptionKey: "cannot prepare the H.264 encoder"])
+        }
+    }
+
     static func wallClock(of pts: CMTime) -> Date {
         let ago = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) - CMTimeGetSeconds(pts)
         return Date().addingTimeInterval(-ago)
@@ -80,49 +195,157 @@ final class Recorder {
         return (String(format: "%02d:%02d:%02d:%02d", c.hour!, c.minute!, c.second!, ff), Int32(total))
     }
 
-    // called on the capture queue
     func appendVideo(_ sb: CMSampleBuffer) {
-        guard writer.status == .writing else { note(); return }
-        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
-        if !started {
-            started = true
-            writer.startSession(atSourceTime: pts)
-            let when = Self.wallClock(of: pts)
-            startClock = when
-            let t = Self.timecode(when, fps: fps)
-            startTimecode = t.text
-            appendTimecode(frames: t.frames, at: pts)
+        guard !finishing, let session = compressionSession,
+              let image = CMSampleBufferGetImageBuffer(sb) else { return }
+        started = true
+        let status = VTCompressionSessionEncodeFrame(
+            session, imageBuffer: image, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb),
+            duration: CMSampleBufferGetDuration(sb), frameProperties: nil, sourceFrameRefcon: nil,
+            infoFlagsOut: nil)
+        if status != noErr { failed = "H.264 encode failed (\(status))" }
+    }
+
+    private static let encodedFrame: VTCompressionOutputCallback = {
+        refcon, _, status, _, sampleBuffer in
+        guard let refcon, status == noErr, let sampleBuffer else { return }
+        Unmanaged<Recorder>.fromOpaque(refcon).takeUnretainedValue().writeEncoded(sampleBuffer)
+    }
+
+    private func writeEncoded(_ sb: CMSampleBuffer) {
+        guard let data = CMSampleBufferGetDataBuffer(sb) else { return }
+        let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
+            as? [[CFString: Any]]
+        let keyframe = !(attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+        var out = Data()
+        if keyframe || !wroteEncodedHeader,
+           let description = CMSampleBufferGetFormatDescription(sb) {
+            var count = 0
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: 0,
+                parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: &count,
+                nalUnitHeaderLengthOut: nil)
+            for index in 0..<count {
+                var pointer: UnsafePointer<UInt8>?
+                var length = 0
+                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: index,
+                    parameterSetPointerOut: &pointer, parameterSetSizeOut: &length,
+                    parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
+                    let pointer else { continue }
+                out.append(contentsOf: [0, 0, 0, 1])
+                out.append(pointer, count: length)
+            }
+            wroteEncodedHeader = true
         }
-        if video.isReadyForMoreMediaData { video.append(sb) }
+        var pointer: UnsafeMutablePointer<Int8>?
+        var length = 0
+        guard CMBlockBufferGetDataPointer(data, atOffset: 0, lengthAtOffsetOut: nil,
+                                          totalLengthOut: &length, dataPointerOut: &pointer) == noErr,
+              let pointer else { return }
+        let bytes = UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self)
+        var nalHeaderLength: Int32 = 4
+        if let description = CMSampleBufferGetFormatDescription(sb) {
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: 0,
+                parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: nil,
+                nalUnitHeaderLengthOut: &nalHeaderLength)
+        }
+        let headerLength = Int(nalHeaderLength)
+        var offset = 0
+        while offset + headerLength <= length {
+            var size = 0
+            for i in 0..<headerLength { size = size << 8 | Int(bytes[offset + i]) }
+            offset += headerLength
+            guard size > 0, offset + size <= length else { break }
+            out.append(contentsOf: [0, 0, 0, 1])
+            out.append(bytes.advanced(by: offset), count: size)
+            offset += size
+        }
+        do { try videoPipe.fileHandleForWriting.write(contentsOf: out) }
+        catch { failed = error.localizedDescription }
     }
 
     func appendAudio(_ sb: CMSampleBuffer) {
-        guard started, writer.status == .writing, let a = audio, a.isReadyForMoreMediaData else { return }
-        if CMTimeCompare(CMSampleBufferGetPresentationTimeStamp(sb), .zero) > 0 { a.append(sb) }
-    }
-
-    private func appendTimecode(frames: Int32, at pts: CMTime) {
-        var be = frames.bigEndian
+        guard !finishing, audioFIFO != nil, CMSampleBufferDataIsReady(sb) else { return }
+        var size = 0
+        CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, bufferListSizeNeededOut: &size, bufferListOut: nil,
+            bufferListSize: 0, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil)
+        let capacity = max(size, MemoryLayout<AudioBufferList>.size)
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        let list = raw.assumingMemoryBound(to: AudioBufferList.self)
         var block: CMBlockBuffer?
-        CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: 4, blockAllocator: nil,
-            customBlockSource: nil, offsetToData: 0, dataLength: 4, flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block)
-        guard let block else { return }
-        CMBlockBufferReplaceDataBytes(with: &be, blockBuffer: block, offsetIntoDestination: 0, dataLength: 4)
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: fps), presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-        var size = 4
-        var sb: CMSampleBuffer?
-        CMSampleBufferCreate(allocator: nil, dataBuffer: block, dataReady: true, makeDataReadyCallback: nil, refcon: nil,
-            formatDescription: tc.sourceFormatHint, sampleCount: 1, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sb)
-        if let sb, tc.isReadyForMoreMediaData { tc.append(sb) }
-        tc.markAsFinished()
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, bufferListSizeNeededOut: nil, bufferListOut: list,
+            bufferListSize: capacity, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block) == noErr else { return }
+        let buffers = Array(UnsafeMutableAudioBufferListPointer(list))
+        guard let first = buffers.first, let data = first.mData else { return }
+        let pcm: Data
+        if buffers.count == 1 {
+            pcm = Data(bytes: data, count: Int(first.mDataByteSize))
+        } else {
+            let bytesPerSample = max(1, Int(first.mDataByteSize) / max(1, Int(first.mNumberChannels) * Int(CMSampleBufferGetNumSamples(sb))))
+            let frames = max(1, Int(first.mDataByteSize) / (bytesPerSample * max(1, Int(first.mNumberChannels))))
+            var interleaved = Data()
+            for frame in 0..<frames {
+                for buffer in buffers {
+                    if let base = buffer.mData {
+                        interleaved.append(Data(bytes: base.advanced(by: frame * bytesPerSample), count: bytesPerSample))
+                    }
+                }
+            }
+            pcm = interleaved
+        }
+        audioWriterQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioLock.lock()
+            let handle = self.audioHandle
+            self.audioLock.unlock()
+            guard let handle else { return }
+            do { try handle.write(contentsOf: pcm) }
+            catch { self.failed = error.localizedDescription }
+        }
     }
-
-    private func note() { if writer.status == .failed, failed == nil { failed = writer.error?.localizedDescription ?? "failed" } }
 
     func finish(_ done: @escaping (Recorder) -> Void) {
-        guard writer.status == .writing else { note(); done(self); return }
-        video.markAsFinished(); audio?.markAsFinished()
-        writer.finishWriting { self.note(); done(self) }
+        guard !finishing else { done(self); return }
+        finishing = true
+        if let session = compressionSession {
+            VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+            VTCompressionSessionInvalidate(session)
+            compressionSession = nil
+        }
+        do { try videoPipe.fileHandleForWriting.close() }
+        catch { failed = error.localizedDescription }
+        audioWriterQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioLock.lock()
+            let audio = self.audioHandle
+            self.audioHandle = nil
+            self.audioLock.unlock()
+            try? audio?.close()
+        }
+        let started = Date()
+        func finishWhenMuxedOut() {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                if self.process.isRunning && Date().timeIntervalSince(started) < 8 {
+                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.2) {
+                        finishWhenMuxedOut()
+                    }
+                    return
+                }
+                if self.process.isRunning {
+                    self.process.terminate()
+                    self.failed = "MKV mux did not close within 8 seconds"
+                } else if self.process.terminationStatus != 0, self.failed == nil {
+                    self.failed = "ffmpeg stopped unexpectedly (\(self.process.terminationStatus))"
+                }
+                done(self)
+            }
+        }
+        finishWhenMuxedOut()
+    }
+
+    deinit {
+        if let audioFIFO { try? FileManager.default.removeItem(atPath: audioFIFO) }
     }
 }

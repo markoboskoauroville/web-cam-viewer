@@ -84,3 +84,23 @@ after the 14 initial rapid-transition misses were reset, retested in isolation a
 Marko: "Please change the color from orange to white."
 **Status (20.11.2026): corrected for v12.** The video status line always uses white, including while it reports drops or a
 reduced live frame rate.
+
+## 20.11.2026: LOW / MID / HIGH H.264 MKV, disk minutes and crash-safe recording
+Marko: "Now record next to the record button that must be a toggle button high, mid, low. Based on 1080p, find another bit rates for another resolution and frame rates. If we have 30 frame rates FPS at 1080p, 10 is low, 10 Mbps, 25 is mid, 50 is high. Then based on this, recalculate for all others and also record a file five seconds of each. Check codec should be H.264 in the file format MKV."
+
+Marko: "Also, you need to open each file and assess its frame rate and pixel density, if it fits the proposed resolution and frame rate. You need to check what's written on the disk. Actually, is the application writing the exact format as UGREEN is offering? If not, fix the bugs."
+
+Marko: "Also next to low, mid, high you need to in parentheses put available hard disk space in minutes."
+
+Marko: "MKV is chosen because in the case of failure of my computer or any other issues that recording stops, the file is actually readable. Please test this feature."
+
+Marko: "For writing MKV files, you need to take code from OBS. Copy the open-source code recorder from OBS."
+
+**Status (20.11.2026): built and verified as v13.** A quality toggle beside Record cycles LOW / MID / HIGH and shows
+available disk time as `(<minutes> min)`. Bitrate is scaled by pixels × delivered FPS from 1080p30: 10 / 25 / 50 Mb/s.
+The installed UGREEN feed delivered 1080p20, so the targets were 6.67 / 16.67 / 33.33 Mb/s. Three five-second files were
+written and opened from disk: each is Matroska, H.264 High, yuv420p, 1920×1080, nominal and actual 20.0 FPS, 48 kHz AAC,
+fully decodable. Measured video plus overhead was about 5.84 / 14.83 / 29.87 Mb/s (VideoToolbox CBR with about 10% encoder
+and container difference on this static scene). The OBS ffmpeg-mux helper architecture is used with an ISC attribution
+to local OBS commit 48b876374: the final MKV exists from the start, one-second clusters are flushed, and VideoToolbox H.264
+packets are copied without a remux. A hard kill of the app left a 1080p20 H.264/AAC MKV that decoded with exit 0.

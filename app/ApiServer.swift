@@ -5,7 +5,7 @@ import Network
 // yes, and then it opens up the Sony webcam, and it records. I press stop". A tiny HTTP API on 127.0.0.1:8867 (loopback
 // only) so the MPA Lessons Analyzer and Queen can drive the app. Every handler runs on the main queue and calls the same
 // Viewer functions the window and the record key call. Port written to ~/.mantra/ports/webcam-recorder.
-//   GET /status   GET /cameras   GET /capture   POST /camera {"name"|"id","slice"}   POST /capture {"format"|"rate"|"mode"}   POST /record/start {"name"?}   POST /record/stop   POST /front   POST /fullscreen {"on"}
+//   GET /status   GET /cameras   GET /capture   POST /camera {"name"|"id","slice"}   POST /capture {"format"|"rate"|"mode"}   POST /quality {"quality"}   POST /record/start {"name"?}   POST /record/stop   POST /front   POST /fullscreen {"on"}
 final class ApiServer {
     static let port: UInt16 = 8867
     private var listener: NWListener?
@@ -75,6 +75,10 @@ final class ApiServer {
             case ("POST", "/capture"):
                 v.apiSetCapture(format: req.body["format"] as? String, rate: (req.body["rate"] as? NSNumber)?.doubleValue,
                                 mode: req.body["mode"] as? String) { Self.send(c, 200, $0) }
+            case ("POST", "/quality"):
+                let quality = (req.body["quality"] as? String).flatMap(RecordQuality.init(rawValue:))
+                if let quality { v.apiSetQuality(quality); Self.send(c, 200, v.apiStatus()) }
+                else { Self.send(c, 409, ["error": "quality must be low, mid or high"]) }
             case ("POST", "/camera"):
                 let r = v.apiSetCamera(name: req.body["name"] as? String, id: req.body["id"] as? String, slice: req.body["slice"] as? Bool)
                 if r.ok { Self.send(c, 200, v.apiStatus()) } else { Self.send(c, 404, ["error": r.error]) }
@@ -90,7 +94,7 @@ final class ApiServer {
             case ("POST", "/fullscreen"):
                 _ = v.apiFullscreen((req.body["on"] as? Bool) ?? true); Self.send(c, 200, v.apiStatus())
             case ("POST", "/front"): v.apiFront(); Self.send(c, 200, ["ok": true])
-            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen"]])
+            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen"]])
             }
         }
     }

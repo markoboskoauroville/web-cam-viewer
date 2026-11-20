@@ -15,9 +15,11 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
 - **Two VU hairlines** down the left edge, left and right channel, 2 pt each and touching (v4), the meter of Mantra Manual
   Camera: dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
 - **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.
-- **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mov`: H.265 1920×1080 10 Mb/s, AAC 48 kHz, a QuickTime time code track =
-  the real-time clock of the first frame (MANTRA_MANIFEST modules/timecode.md); `REC  HH:MM:SS:FF` bottom middle while it
-  records. One-second fragments, so a crash loses a second.
+- **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mkv`: H.264 at the live camera resolution and delivered frame rate, AAC
+  48 kHz, with the real-time start time code in the file metadata; `REC  HH:MM:SS:FF` is shown while it records.
+  LOW / MID / HIGH scale from 10 / 25 / 50 Mb/s at 1920×1080 30 FPS, by pixels × delivered FPS. The quality key is next
+  to Record and shows the estimated free-space recording time in minutes. The MKV is flushed through one-second clusters
+  from the first frame so an unplanned app/computer stop leaves a readable file.
 - **⌘F** or the corners key: full screen: the picture, the two meters (whole height) and the REC time code; only the bar
   goes. **Escape** goes back.
 - **No Sony tether.** Webcam Recorder never opens an ImageCapture/PTP session and never holds an unselected Sony open.

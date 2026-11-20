@@ -7,14 +7,14 @@
 // So: one window, a bar at the top with the camera menu on the left and ✕ on the right (✕ quits, the camera light goes
 // off), the picture under it, whole, never cropped.
 // v2, the same day: a sound input menu beside the camera, the VU hairline of Mantra Manual Camera on the left edge, a
-// record key (~/Movies/mb_<date>_<time>.mov, H.265 1080p 10 Mb/s, AAC, a time code track = the real-time clock, shown
+// record key (~/Movies/mb_<date>_<time>.mkv, H.264 at native feed settings, AAC, a time code = the real-time clock, shown
 // REC HH:MM:SS:FF bottom middle while recording), and full screen: the corners key, ⌘F in, Escape out, only the picture. PERMISSIONS (amber) appears beside ✕ only while the camera is refused.
 import AppKit
 import AVFoundation
 
 // v3: two VU hairlines, left and right channel, side by side on the left edge; the record key shows a see-through
 // red under the mouse.
-let VERSION = 12
+let VERSION = 13
 let NAME = "Webcam Recorder (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {

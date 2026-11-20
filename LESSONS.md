@@ -50,3 +50,9 @@
     sample and the next sample's presentation stamp may also reveal the same gap. Count the reported frames first, then
     add only the excess missing from the timestamp gap. Actual FPS is measured from delivered frames per monotonic second;
     resolution and format come from the live pixel buffer, not from the recording settings.
+21. **A “record then remux to MKV” path is not crash-safe (v13):** the final MKV must exist from the first sample.
+    OBS's ffmpeg-mux pattern uses a helper process and continuously flushed clusters; VideoToolbox encodes H.264 and the
+    helper packet-copies it into Matroska with AAC. A hard-kill test, not a graceful stop, proves recoverability.
+22. **Pipe writes cannot run on the capture queue (v13):** audio filled a FIFO and starved video capture before VideoToolbox
+    could submit frames. OBS-style I/O belongs on a separate writer queue; the app validates output dimensions, frame count,
+    duration, codec, pixel format, bitrate and decode from the disk file.

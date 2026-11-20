@@ -1,5 +1,14 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 20.11.2026: v13 = crash-safe H.264 MKV quality recording.** Record now writes the final Matroska file from the
+first frame through an OBS-style ffmpeg-mux helper path. VideoToolbox creates H.264 packets at the live feed's exact
+dimensions and delivered FPS; ffmpeg packet-copies video and muxes AAC audio into one-second MKV clusters. LOW / MID / HIGH
+beside Record use 10 / 25 / 50 Mb/s at 1080p30 and scale by pixels × delivered FPS; the key also shows free-space minutes.
+Hard-killing the app during recording left a decodable H.264/AAC MKV.
+Final disk verification: on the live 1920×1080 20 FPS UGREEN feed, LOW/MID/HIGH targets were 6.67/16.67/33.33 Mb/s and
+their five-second files were Matroska + H.264 High/yuv420p + AAC, exactly 1920×1080 and 20.0 FPS, with all frames decoded.
+The static-scene CBR files measured about 5.84/14.83/29.87 Mb/s at the video-plus-overhead probe (about 10% below target).
+
 **State 20.11.2026: v12 = verified capture-device modes and white status.** Capture formats and exact frame rates are read
 from the selected device. The app keeps only rates explicitly exposed by AVFoundation (24/25 are absent for UGREEN 15389),
 uses the device's own exact duration timestamps, and verifies real UGREEN mode switches through active readback plus live
@@ -75,10 +84,10 @@ set to HD(720p) 25p (MJPEG): Marko told MENU → Network → Streaming → USB S
 
 **Not yet seen by Marko:** full screen (⌘F / Escape) and a take of his own with REC and the time code on screen.
 
-**Code:** `app/App.swift` (start, flags, ⌘Q menu), `app/Viewer.swift` (window, bar, menus, session with video and audio
-data outputs, capture controls, recording control, full screen, watchdog, selftest), `app/Recorder.swift` (AVAssetWriter: HEVC,
-AAC, the tmcd track), and `app/Meter.swift` (StereoMeter, the record key, the corners key). `site/public` is the page
-(SEO by kits/seo, bowl, counters).
+**Code:** `app/App.swift` (start, flags, ⌘Q menu), `app/Viewer.swift` (window, bar, menus, capture session, recording
+control, full screen, watchdog, selftest), `app/Recorder.swift` (VideoToolbox H.264 plus the OBS-style ffmpeg-mux pattern;
+OBS local source commit 48b876374, ISC attribution in the file), and `app/Meter.swift` (StereoMeter and record controls).
+`site/public` is the page (SEO by kits/seo, bowl, counters).
 
 **Next:** check each capture card's exposed format and control list in real use. The page's banner and lifestyle pictures are real screenshots for now; Nano Banana renders of
 the app in use replace them when made (page-pictures-nano-banana).

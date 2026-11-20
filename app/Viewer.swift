@@ -35,6 +35,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
+    private let qualityKey = NSButton()
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
@@ -73,6 +74,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let videoOut = AVCaptureVideoDataOutput()
     private let audioOut = AVCaptureAudioDataOutput()
     private var fps: Int32 = 30
+    private var recordQuality = RecordQuality(rawValue: UserDefaults.standard.string(forKey: "recordQuality") ?? "mid") ?? .mid
     private var measuredFPS = 0.0
     private var measuredDrops = 0
     private var feedWidth = 0
@@ -246,12 +248,21 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.target = self; recKey.action = #selector(toggleRecord)
         recKey.setAccessibilityIdentifier("rec")
         recKey.setAccessibilityLabel("Record")
-        recKey.toolTip = "Record: ~/Movies/mb_<date>_<time>.mov, H.265 1080p 10 Mb/s with time code"
+        recKey.toolTip = "Record: ~/Movies/mb_<date>_<time>.mkv, H.264 at the live feed resolution and frame rate"
         recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
         startPictureClick()
-        let group = NSStackView(views: [popup, micPopup, recKey, feedStats])
+        qualityKey.translatesAutoresizingMaskIntoConstraints = false
+        qualityKey.isBordered = false
+        qualityKey.target = self
+        qualityKey.action = #selector(toggleQuality)
+        qualityKey.setAccessibilityIdentifier("quality")
+        qualityKey.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
+        qualityKey.setContentHuggingPriority(.required, for: .horizontal)
+        updateQualityKey()
+
+        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -732,6 +743,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         feedWidth = width
         feedHeight = height
         feedPixelFormat = format
+        updateQualityKey()
         guard !feedStats.isHidden else { return }
         let degraded = drops > 0 || (measuredFPS > 0 && measuredFPS + 0.9 < Double(fps))
         var text = ""
@@ -1025,12 +1037,49 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     @objc func toggleRecord() { isRecording ? stopRecording() : startRecording() }
 
+    @objc private func toggleQuality() {
+        let all = RecordQuality.allCases
+        guard let index = all.firstIndex(of: recordQuality) else { return }
+        recordQuality = all[(index + 1) % all.count]
+        UserDefaults.standard.set(recordQuality.rawValue, forKey: "recordQuality")
+        updateQualityKey()
+    }
+
+    private func updateQualityKey() {
+        let width = sliceOn ? Slicer.outW : max(feedWidth, 1920)
+        let height = sliceOn ? Slicer.outH : max(feedHeight, 1080)
+        let bitrate = recordQuality.bitrate(width: width, height: height, fps: recordingFPS)
+        let minutes = Self.recordingMinutesRemaining(at: bitrate)
+        let remaining = "\(minutes) min"
+        qualityKey.attributedTitle = NSAttributedString(string: "\(recordQuality.title) (\(remaining))", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.white,
+        ])
+        qualityKey.toolTip = "\(recordQuality.title): \(String(format: "%.1f", Double(bitrate) / 1_000_000)) Mb/s at \(recordingFPS) live FPS · H.264 MKV · \(remaining) available"
+        qualityKey.setAccessibilityLabel("\(recordQuality.title) recording quality, \(remaining) available")
+        recKey.toolTip = "Record: \(qualityKey.title), \(String(format: "%.1f", Double(bitrate) / 1_000_000)) Mb/s H.264 MKV"
+    }
+
+    private static func recordingMinutesRemaining(at videoBitrate: Int) -> Int {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        let values = try? movies.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        let available = values?.volumeAvailableCapacityForImportantUsage ?? 0
+        // Stereo AAC is 256 kb/s.
+        let bytesPerMinute = Double(videoBitrate + 256_000) / 8 * 60
+        return max(0, Int(Double(available) / bytesPerMinute))
+    }
+
     func startRecording(title: String? = nil, _ started: ((URL?) -> Void)? = nil) {
         guard current != nil, cameraAllowed else { say("No camera to record."); started?(nil); return }
-        let fps = self.fps
+        let fps = recordingFPS
+        let width = self.sliceOn ? Slicer.outW : max(self.capturedWidth, 1920)
+        let height = self.sliceOn ? Slicer.outH : max(self.capturedHeight, 1080)
+        let quality = self.recordQuality
         captureQueue.async {
             do {
-                let r = try Recorder(fps: fps, vertical: self.sliceOn, title: title, audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
+                let r = try Recorder(fps: fps, width: width, height: height, quality: quality,
+                                     vertical: self.sliceOn, title: title,
+                                     audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
                 self.recorder = r
                 DispatchQueue.main.async { self.interrupted = false; self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
             } catch {
@@ -1211,6 +1260,13 @@ final class ShortPopUpCell: NSPopUpButtonCell {
 private func nn(_ x: Any?) -> Any { x ?? NSNull() }
 
 extension Viewer {
+    func apiSetQuality(_ quality: RecordQuality) {
+        guard !isRecording else { return }
+        recordQuality = quality
+        UserDefaults.standard.set(quality.rawValue, forKey: "recordQuality")
+        updateQualityKey()
+    }
+
     func apiCaptureControls() -> [String: Any] {
         guard let device = current else { return ["active": false, "formats": []] }
         let active = Self.captureFormatKey(device.activeFormat)
@@ -1294,10 +1350,20 @@ extension Viewer {
         return ["camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
-                "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "1920x1080",
+                "quality": recordQuality.rawValue,
+                "bitrate": recordQuality.bitrate(width: feedWidth, height: feedHeight, fps: recordingFPS),
+                "recordFPS": Int(recordingFPS),
+                "remainingMinutes": Self.recordingMinutesRemaining(
+                    at: recordQuality.bitrate(width: max(feedWidth, 1920), height: max(feedHeight, 1080), fps: recordingFPS)),
+                "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "\(feedWidth)x\(feedHeight)",
                 "feed": ["width": feedWidth, "height": feedHeight, "format": feedPixelFormat,
                          "active": !feedStats.isHidden, "currentFPS": measuredFPS, "droppedFrames": measuredDrops],
                 "levels": lastLevels.map { Double($0) }]
+    }
+
+    private var recordingFPS: Int32 {
+        let live = Int32(max(1, min(120, measuredFPS.rounded())))
+        return measuredFPS > 0 ? live : fps
     }
     func apiCameras() -> [[String: Any]] {
         devices.map { ["name": $0.localizedName, "id": $0.uniqueID, "slice": savedSlice($0),
