@@ -72,3 +72,15 @@ Marko: "Please remove tethering to Sony camera 7M5. Now I cannot control remote 
 **Status (20.11.2026): built as v11.** All ImageCapture/PTP access and the unselected-Sony keeper are removed, including
 the old Sony status controls. Clicking the live status line opens the selected capture device's supported format, frame-rate,
 focus, exposure and white-balance controls, with format and rate remembered per device.
+
+## 20.11.2026: test the UGREEN modes and keep only working settings
+Marko: "Please test all the modes of the uGreen capturing device and check if they switch to that setting. If they do not switch, they need to go out. Only what's working should be in the menu.Also I need frame per second. I don't have 25. I don't have 24. If they're not supported, I can understand that, but please research on the internet what is supported."
+**Status (20.11.2026): v12 uses exact device-reported fixed rates.** UGREEN 15389 on this Mac exposes 10, 20, 30, 50 and
+60 FPS for 1080p-and-below formats and 10, 20, 30 for 2560×1440. It exposes no 24/25 FPS modes. UGREEN's product
+documentation says 2K@30 and 1080p@60 output. Every menu format/rate is checked by active-format readback and delivered live
+frames; unsupported focus, exposure and white-balance choices are omitted. The connected device passed 106/106 combinations
+after the 14 initial rapid-transition misses were reset, retested in isolation and passed.
+
+Marko: "Please change the color from orange to white."
+**Status (20.11.2026): corrected for v12.** The video status line always uses white, including while it reports drops or a
+reduced live frame rate.

@@ -1,5 +1,13 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 20.11.2026: v12 = verified capture-device modes and white status.** Capture formats and exact frame rates are read
+from the selected device. The app keeps only rates explicitly exposed by AVFoundation (24/25 are absent for UGREEN 15389),
+uses the device's own exact duration timestamps, and verifies real UGREEN mode switches through active readback plus live
+dimensions and delivered FPS. The statistics line stays white even while reporting degraded frame delivery.
+The connected UGREEN 15389 passed 106/106 format/FPS combinations with active-state readback and live dimensions/rate:
+10/20/30/50/60 FPS for 1080p and below, 10/20/30 for 2560×1440. An initial 14 misses were transition timing and all
+passed when reset and tested in isolation. UGREEN's own documentation lists 2K@30 and 1080p@60.
+
 **State 20.11.2026: v11 = capture-device controls and no Sony tether.** The Sony PTP/ImageCapture reader, Sony status bar
 and unselected-Sony keeper have been removed completely, so Sony's official application retains remote-shooting control.
 Clicking the video-input line opens the selected capture device's supported format and frame-rate choices plus supported

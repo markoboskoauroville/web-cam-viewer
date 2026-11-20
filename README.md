@@ -7,9 +7,11 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
 - **The picture** fills the whole window, never cropped. Over its top edge a half see-through bar: camera menu · sound
   menu · ● record, in the top middle; the full-screen key (four corners) and ✕ at the top right.
 - **Video input statistics** appear at the top while both a camera and a sound input are active: negotiated resolution,
-  target FPS, pixel format and dropped frames. If the feed falls behind, its live FPS appears beside the target in amber.
+  target FPS, pixel format and dropped frames. If the feed falls behind, its live FPS appears beside the target in white.
   The line sits inside the dark input bar, immediately beside the record key. Click it for capture-device preferences:
-  supported format, frame rate, focus, exposure and white-balance modes. Choices are kept per device.
+  supported format, frame rate, focus, exposure and white-balance modes. Choices are kept per device. The connected
+  UGREEN 15389 passed every exposed combination (106/106): 10/20/30/50/60 FPS through 1080p and 10/20/30 at 1440p.
+  It does not expose 24/25 FPS or focus/exposure/white-balance controls on this Mac.
 - **Two VU hairlines** down the left edge, left and right channel, 2 pt each and touching (v4), the meter of Mantra Manual
   Camera: dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
 - **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.
@@ -40,6 +42,7 @@ Cloudflare Pages. Repository secrets: `CLOUDFLARE_API_TOKEN` (Marko pasted it), 
 
     WebCamViewer --list                 # the cameras, in the menu's order
     curl http://127.0.0.1:8867/status    # includes feed.width/height/format/currentFPS/droppedFrames/active
+    curl http://127.0.0.1:8867/capture   # verified formats, FPS and supported controls
     open -n -g "/Applications/Webcam Recorder (Mantra).app" --args --quiet
                                         # a test start on the MacBook Pro screen, without taking focus
     open -n -g "/Applications/Webcam Recorder (Mantra).app" --args --selftest /path/report.txt

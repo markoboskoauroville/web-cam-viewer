@@ -742,7 +742,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if drops > 0 { text += " · \(drops) DROP\(drops == 1 ? "" : "S")" }
         feedStats.attributedTitle = NSAttributedString(string: text, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: degraded ? NSColor.systemOrange : NSColor.white.withAlphaComponent(0.86)])
+            .foregroundColor: NSColor.white.withAlphaComponent(0.9)])
     }
 
     @objc private func openCapturePreferences() {
@@ -873,7 +873,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let device = current else { return }
         if isRecording { stopRecording() }
         queue.async {
-            self.session.beginConfiguration()
             do {
                 try device.lockForConfiguration()
                 device.activeFormat = format
@@ -893,7 +892,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             } catch {
                 DispatchQueue.main.async { self.say("Cannot change \(device.localizedName):\n\(error.localizedDescription)") }
             }
-            self.session.commitConfiguration()
         }
     }
 
@@ -920,15 +918,22 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private static func captureRates(for format: AVCaptureDevice.Format) -> [Double] {
-        let canonical = [10.0, 12.0, 15.0, 20.0, 23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 90.0, 120.0]
-        var rates = canonical.filter { rate in
-            format.videoSupportedFrameRateRanges.contains { rate >= $0.minFrameRate - 0.1 && rate <= $0.maxFrameRate + 0.1 }
+        var rates: [Double] = []
+        for range in format.videoSupportedFrameRateRanges {
+            let continuous = range.maxFrameRate - range.minFrameRate > 0.2
+            if continuous {
+                rates.append(range.minFrameRate)
+                rates.append(range.maxFrameRate)
+                let whole = stride(from: ceil(range.minFrameRate), through: floor(range.maxFrameRate), by: 5).map { Double($0) }
+                rates.append(contentsOf: whole)
+            } else {
+                rates.append(range.maxFrameRate)
+            }
         }
-        let minimum = format.videoSupportedFrameRateRanges.map(\.minFrameRate).min()
-        let maximum = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max()
-        if rates.isEmpty, let minimum { rates.append(minimum.rounded()) }
-        if let maximum, !rates.contains(where: { abs($0 - maximum) < 0.2 }) { rates.append(maximum) }
-        return rates.sorted()
+        return rates.sorted().reduce(into: []) { result, rate in
+            let normalized = abs(rate - rate.rounded()) < 0.05 ? rate.rounded() : rate
+            if !result.contains(where: { abs($0 - normalized) < 0.01 }) { result.append(normalized) }
+        }
     }
 
     private static func supportedCaptureRate(_ rate: Double, for format: AVCaptureDevice.Format) -> Double {
@@ -954,7 +959,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private static func rateText(_ rate: Double) -> String {
-        rate.rounded() == rate ? "\(Int(rate))" : String(format: "%.2f", rate)
+        let normalized = abs(rate - rate.rounded()) < 0.05 ? rate.rounded() : rate
+        return normalized.rounded() == normalized ? "\(Int(normalized))" : String(format: "%.2f", normalized)
     }
 
     private static func captureFormatPreference(_ device: AVCaptureDevice) -> String {
@@ -967,7 +973,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     private static func captureFormatKey(_ format: AVCaptureDevice.Format) -> String {
         let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-        return "\(size.width)x\(size.height):\(CMFormatDescriptionGetMediaSubType(format.formatDescription))"
+        let rates = captureRates(for: format).map(rateText).joined(separator: ",")
+        return "\(size.width)x\(size.height):\(CMFormatDescriptionGetMediaSubType(format.formatDescription)):\(rates)"
     }
 
     private static func focusName(_ mode: AVCaptureDevice.FocusMode) -> String {
@@ -1204,6 +1211,83 @@ final class ShortPopUpCell: NSPopUpButtonCell {
 private func nn(_ x: Any?) -> Any { x ?? NSNull() }
 
 extension Viewer {
+    func apiCaptureControls() -> [String: Any] {
+        guard let device = current else { return ["active": false, "formats": []] }
+        let active = Self.captureFormatKey(device.activeFormat)
+        let formats = device.formats.map { format in
+            let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return [
+                "id": Self.captureFormatKey(format),
+                "width": Int(size.width),
+                "height": Int(size.height),
+                "pixelFormat": Self.pixelFormatName(CMFormatDescriptionGetMediaSubType(format.formatDescription)),
+                "rates": Self.captureRates(for: format),
+                "active": Self.captureFormatKey(format) == active,
+            ] as [String: Any]
+        }
+        let focus = [
+            "current": Self.focusName(device.focusMode),
+            "locked": device.isFocusModeSupported(.locked),
+            "auto": device.isFocusModeSupported(.autoFocus),
+            "continuous": device.isFocusModeSupported(.continuousAutoFocus),
+        ] as [String: Any]
+        let exposure = [
+            "current": Self.exposureName(device.exposureMode),
+            "locked": device.isExposureModeSupported(.locked),
+            "auto": device.isExposureModeSupported(.autoExpose),
+            "continuous": device.isExposureModeSupported(.continuousAutoExposure),
+        ] as [String: Any]
+        let whiteBalance = [
+            "current": Self.whiteBalanceName(device.whiteBalanceMode),
+            "locked": device.isWhiteBalanceModeSupported(.locked),
+            "auto": device.isWhiteBalanceModeSupported(.autoWhiteBalance),
+            "continuous": device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance),
+        ] as [String: Any]
+        return ["active": true, "format": active, "fps": Int(fps), "formats": formats,
+                "focus": focus, "exposure": exposure, "whiteBalance": whiteBalance]
+    }
+
+    func apiSetCapture(format: String?, rate: Double?, mode: String?, _ done: @escaping ([String: Any]) -> Void) {
+        guard let device = current else { done(["ok": false, "error": "no active capture device"]); return }
+        queue.async {
+            do {
+                try device.lockForConfiguration()
+                if let format,
+                   let selected = device.formats.first(where: { Self.captureFormatKey($0) == format }) {
+                    device.activeFormat = selected
+                }
+                let requestedRate = rate ?? Double(self.fps)
+                let supported = Self.supportedCaptureRate(requestedRate, for: device.activeFormat)
+                let duration = Self.captureDuration(supported, for: device.activeFormat)
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+                self.fps = Int32((1 / CMTimeGetSeconds(duration)).rounded())
+                if let mode {
+                    switch mode {
+                    case "focus:locked": device.focusMode = .locked
+                    case "focus:auto": device.focusMode = .autoFocus
+                    case "focus:continuous": device.focusMode = .continuousAutoFocus
+                    case "exposure:locked": device.exposureMode = .locked
+                    case "exposure:auto": device.exposureMode = .autoExpose
+                    case "exposure:continuous": device.exposureMode = .continuousAutoExposure
+                    case "whiteBalance:locked": device.whiteBalanceMode = .locked
+                    case "whiteBalance:auto": device.whiteBalanceMode = .autoWhiteBalance
+                    case "whiteBalance:continuous": device.whiteBalanceMode = .continuousAutoWhiteBalance
+                    default: break
+                    }
+                }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.resetFeedStats()
+                    self.updateFeedStatsVisibility()
+                    done(["ok": true, "controls": self.apiCaptureControls()])
+                }
+            } catch {
+                DispatchQueue.main.async { done(["ok": false, "error": error.localizedDescription]) }
+            }
+        }
+    }
+
     func apiStatus() -> [String: Any] {
         let rec = isRecording
         let vertical = wantedID.map { UserDefaults.standard.bool(forKey: "slice." + $0) } ?? false
