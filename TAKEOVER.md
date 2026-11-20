@@ -1,5 +1,10 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 20.11.2026: v11 = capture-device controls and no Sony tether.** The Sony PTP/ImageCapture reader, Sony status bar
+and unselected-Sony keeper have been removed completely, so Sony's official application retains remote-shooting control.
+Clicking the video-input line opens the selected capture device's supported format and frame-rate choices plus supported
+focus, exposure and white-balance modes. Format and frame rate choices are remembered per device.
+
 **State 20.11.2026: v10 = live video-input statistics in the top bar.** When a camera and sound input are both active, a compact
 line inside the dark input bar, immediately after the record key, shows the source frame's resolution, target frame rate, pixel format and dropped-frame
 count. A live frame rate is added in amber when delivery is degraded. AVFoundation drop notifications and presentation
@@ -63,12 +68,9 @@ set to HD(720p) 25p (MJPEG): Marko told MENU → Network → Streaming → USB S
 **Not yet seen by Marko:** full screen (⌘F / Escape) and a take of his own with REC and the time code on screen.
 
 **Code:** `app/App.swift` (start, flags, ⌘Q menu), `app/Viewer.swift` (window, bar, menus, session with video and audio
-data outputs, recording control, full screen, Sony wiring, watchdog, selftest), `app/Recorder.swift` (AVAssetWriter: HEVC,
-AAC, the tmcd track), `app/Meter.swift` (StereoMeter, the record key, the corners key), `app/SonyBar.swift`,
-`app/SonyLink.swift`, `app/SonyCamera.swift`, `app/SonyProbe.swift` (`--sony-probe`), `app/KeepStreaming.swift`. `site/public` the page (SEO by kits/seo, bowl, counters).
+data outputs, capture controls, recording control, full screen, watchdog, selftest), `app/Recorder.swift` (AVAssetWriter: HEVC,
+AAC, the tmcd track), and `app/Meter.swift` (StereoMeter, the record key, the corners key). `site/public` is the page
+(SEO by kits/seo, bowl, counters).
 
-**Next:** (1) Marko sets the Sony's streaming to 1080p; check the format list shows 1920×1080. (2) When the UGREEN HDMI
-capture card arrives (in his basket): Sony USB Cnct Mode (PORT1) = Remote Shoot/Trn., picture via the card, then test every
-Sony control and the TC jam (`--sony-probe` first). (3) Offered, not asked for: a one-cable mode switcher (frozen frame
-while the camera changes USB mode). (4) His look in use. The page's banner and lifestyle pictures are real screenshots for now; Nano Banana renders of
+**Next:** check each capture card's exposed format and control list in real use. The page's banner and lifestyle pictures are real screenshots for now; Nano Banana renders of
 the app in use replace them when made (page-pictures-nano-banana).

@@ -66,3 +66,9 @@ local `/status` API.
 Marko: "You need to move the status line and the top bar dark bar next to the record button. That was the original request."
 **Status (20.11.2026): corrected in v10.** The statistics line is immediately after the record key inside the dark input
 bar; the separate overlay below the bar is removed.
+
+## 20.11.2026: remove Sony tether, control the capture device instead
+Marko: "Please remove tethering to Sony camera 7M5. Now I cannot control remote shooting with it. Look at the screen right now. When I connect the camera, it reads the camera status, and I cannot control it in the official Sony app. Instead of that, I need to have controls of my capture device, please. Capture device control. If I click on the status line, I can change preferences of my capture device."
+**Status (20.11.2026): built as v11.** All ImageCapture/PTP access and the unselected-Sony keeper are removed, including
+the old Sony status controls. Clicking the live status line opens the selected capture device's supported format, frame-rate,
+focus, exposure and white-balance controls, with format and rate remembered per device.

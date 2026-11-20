@@ -2,13 +2,17 @@ import AppKit
 import AVFoundation
 
 enum Cameras {
+    static func isSony(_ device: AVCaptureDevice) -> Bool {
+        device.localizedName.uppercased().hasPrefix("ILCE") || device.manufacturer.uppercased().contains("SONY")
+    }
+
     // every kind of camera macOS hands to an app: built-in, USB/UVC webcams and capture cards, the iPhone, Desk View
     static func all() -> [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera, .deskViewCamera],
             mediaType: .video, position: .unspecified).devices
             .sorted { a, b in   // a fixed order: the Sony first (as in the classroom, v5), the Mac's own camera, then by name
-                let asn = KeepStreaming.isSony(a), bsn = KeepStreaming.isSony(b)
+                let asn = isSony(a), bsn = isSony(b)
                 if asn != bsn { return asn }
                 let ai = a.deviceType == .builtInWideAngleCamera, bi = b.deviceType == .builtInWideAngleCamera
                 return ai != bi ? ai : a.localizedName.localizedStandardCompare(b.localizedName) == .orderedAscending
@@ -31,9 +35,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
-    let sonyBar = SonyBar()
-    let sony = SonyCamera()
-    private let keepStreaming = KeepStreaming()
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
@@ -42,7 +43,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let message = NSTextField(labelWithString: "")
     private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
-    private let feedStats = NSTextField(labelWithString: "")
+    private let feedStats = NSButton()
     private var devices: [AVCaptureDevice] = []
     // v5: every camera is followed by its "· vertical slice" entry; an entry is (camera index, slice?)
     private var entries: [(device: Int, slice: Bool)] = []
@@ -118,7 +119,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         nc.addObserver(self, selector: #selector(devicesChanged), name: AVCaptureSession.interruptionEndedNotification, object: nil)
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
-        startSony()
         api = ApiServer(viewer: self); api?.start()
         // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
         // have held it when it was chosen)
@@ -126,49 +126,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateFeedStats() }
     }
 
-    // MARK: the Sony (v4): the group in the bar while it is connected, a click on the picture a touch on its screen
+    // MARK: the picture
 
-    private func startSony() {
-        sonyBar.rec.target = self; sonyBar.rec.action = #selector(sonyRec)
-        sonyBar.focus.target = self; sonyBar.focus.action = #selector(sonyFocus)
-        sony.log = { NSLog("Sony: %@", $0) }
-        sony.onConnected = { [weak self] on in self?.updateSonyBar() }
-        sony.onChange = { [weak self] st in
-            guard let self else { return }
-            self.sonyBar.setRecording(st.recording)
-            self.sonyBar.setFocused(st.focused)
-            self.sonyBar.setBattery(st.battery)
-            self.sonyBar.aperture.stringValue = SonyCamera.fText(st.fnumber)
-            self.sonyBar.shutter.stringValue = SonyCamera.shutterText(st.shutter)
-            self.sonyBar.iso.stringValue = SonyCamera.isoText(st.iso)
-            self.sonyBar.name.stringValue = st.model
-        }
-        sony.start()
+    private func startPictureClick() {
         let click = NSClickGestureRecognizer(target: self, action: #selector(pictureClicked(_:)))
         picture.addGestureRecognizer(click)
-    }
-
-    /// the group shows while a Sony is reachable: green-able over PTP (Remote Shoot), all grey while the chosen picture is
-    /// the Sony itself streaming over USB (nothing can be controlled then)
-    /// the Sony kept on Streaming:Output while it is not the chosen camera (the chosen one is open anyway)
-    private func holdSony() {
-        guard cameraAllowed else { return }
-        let sony = devices.first { KeepStreaming.isSony($0) && $0.uniqueID != current?.uniqueID }
-        keepStreaming.hold(sony)
-    }
-
-    func updateSonyBar() {
-        let streamingSony = current.map { $0.localizedName.uppercased().hasPrefix("ILCE") || $0.manufacturer.uppercased().contains("SONY") } ?? false
-        if sony.ready {
-            sonyBar.isHidden = false
-            sonyBar.setControllable(true, name: sony.state.model)
-            sony.onChange?(sony.state)
-        } else if streamingSony, let c = current {
-            sonyBar.isHidden = false
-            sonyBar.setControllable(false, name: c.localizedName)
-        } else {
-            sonyBar.isHidden = true
-        }
     }
 
     private func checkFrames() {
@@ -185,28 +147,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
     }
 
-    @objc private func sonyRec() { sony.toggleRecord() }
-    @objc private func sonyFocus() { sony.focus() }
-
     @objc private func pictureClicked(_ g: NSClickGestureRecognizer) {
-        // v7: a click opens the camera and sound choice; Option-click is the touch focus on the Sony (v4)
-        if !NSEvent.modifierFlags.contains(.option) || !sony.ready { showChoice(); return }
-        let p = g.location(in: picture)
-        if !sliceLayer.isHidden {    // v5: a point on the vertical picture is a point inside the middle strip of the frame
-            let r = AVMakeRect(aspectRatio: CGSize(width: Slicer.outW, height: Slicer.outH), insideRect: picture.bounds)
-            let nx = (p.x - r.minX) / r.width, ny = 1 - (p.y - r.minY) / r.height
-            let src = slicer.sourceSize
-            guard (0...1).contains(nx), (0...1).contains(ny), src.width > 0 else { return }
-            let fw = CGFloat(Slicer.stripWidth(w: Int(src.width), h: Int(src.height))) / src.width
-            sony.touch(nx: (1 - fw) / 2 + nx * fw, ny: ny)
-            return
-        }
-        // the view's point in the preview layer's own coordinates, then the picture's 0…1, top-left origin
-        // (the letterbox bands fall outside 0…1 and do nothing)
-        let lp = picture.layer.map { $0.convert(p, to: preview) } ?? p
-        let d = preview.captureDevicePointConverted(fromLayerPoint: lp)
-        guard (0...1).contains(d.x), (0...1).contains(d.y) else { return }
-        sony.touch(nx: d.x, ny: d.y)
+        showChoice()
     }
 
     // MARK: v7, the choice on a click
@@ -308,8 +250,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
-        sonyBar.isHidden = true   // only while a Sony is connected
-        let group = NSStackView(views: [popup, micPopup, recKey, feedStats, sonyBar])
+        startPictureClick()
+        let group = NSStackView(views: [popup, micPopup, recKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -380,10 +322,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // Live input facts beside the record key, in the dark input bar.
         feedStats.translatesAutoresizingMaskIntoConstraints = false
         feedStats.isHidden = true
-        feedStats.alignment = .left
+        feedStats.isBordered = false
+        feedStats.title = ""
+        feedStats.target = self
+        feedStats.action = #selector(openCapturePreferences)
         feedStats.lineBreakMode = .byClipping
+        feedStats.toolTip = "Capture device preferences"
         feedStats.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
-        feedStats.textColor = NSColor.white.withAlphaComponent(0.86)
         feedStats.setAccessibilityIdentifier("video-stats")
         feedStats.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -498,7 +443,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
         statsTimer?.invalidate(); statsTimer = nil
-        keepStreaming.stop()
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
         let end = { self.queue.async { if self.session.isRunning { self.session.stopRunning() }; DispatchQueue.main.async { done?() } } }
@@ -640,8 +584,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         popup.selectItem(at: -1)
         say("Waiting for \(wantedName ?? "the camera")…")
         updateFeedStatsVisibility()
-        updateSonyBar()
-        holdSony()
     }
 
     @objc private func picked() {
@@ -662,8 +604,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         resetFeedStats()
         updateFeedStatsVisibility()
         applyMode(device.map { savedSlice($0) } ?? false)
-        updateSonyBar()
-        holdSony()
         guard let device else {
             queue.async { if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil } }
             say("No camera is connected.")
@@ -671,8 +611,6 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         guard cameraAllowed else { say("The camera is not allowed.\nPERMISSIONS, top right, opens the switch."); return }
         say("")
-        // the keeper lets go of this Sony before the picture opens it (both at once left the picture black)
-        if KeepStreaming.isSony(device) { keepStreaming.releaseNow() }
         queue.async {
             self.session.beginConfiguration()
             if let v = self.videoIn { self.session.removeInput(v); self.videoIn = nil }
@@ -685,7 +623,24 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 DispatchQueue.main.async { self.say("\(device.localizedName) cannot be opened:\n\(error.localizedDescription)") }
             }
             self.session.commitConfiguration()
-            self.fps = Self.wholeFrameRate(device)
+            do {
+                try device.lockForConfiguration()
+                let defaults = UserDefaults.standard
+                if let wanted = defaults.string(forKey: Self.captureFormatPreference(device)),
+                   let format = device.formats.first(where: { Self.captureFormatKey($0) == wanted }) {
+                    device.activeFormat = format
+                }
+                let savedRate = defaults.double(forKey: Self.captureRatePreference(device))
+                let rate = savedRate > 0 ? Self.supportedCaptureRate(savedRate, for: device.activeFormat)
+                    : Self.currentWholeFrameRate(device)
+                let duration = Self.captureDuration(rate, for: device.activeFormat)
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+                device.unlockForConfiguration()
+                self.fps = Int32(rate.rounded())
+            } catch {
+                DispatchQueue.main.async { self.say("Cannot configure \(device.localizedName):\n\(error.localizedDescription)") }
+            }
             if !self.session.isRunning { self.session.startRunning() }
         }
     }
@@ -709,20 +664,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if let s = window.screen { window.setFrame(window.constrainFrameRect(window.frame, to: s), display: true) }
     }
 
-    // the time code counts whole frames: the camera is set to a whole rate (30, else 25, 24, 60, 50) where it can be,
-    // so the frames and the clock agree; the rate it ends up on, rounded, is the time code's
-    private static func wholeFrameRate(_ d: AVCaptureDevice) -> Int32 {
-        let ranges = d.activeFormat.videoSupportedFrameRateRanges
-        for r in [30.0, 25, 24, 60, 50] where ranges.contains(where: { $0.minFrameRate <= r && r <= $0.maxFrameRate }) {
-            if (try? d.lockForConfiguration()) != nil {
-                d.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(r))
-                d.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(r))
-                d.unlockForConfiguration()
-            }
-            return Int32(r)
-        }
+    // The capture device's negotiated duration is the default; a supported whole rate can then be chosen from the menu.
+    private static func currentWholeFrameRate(_ d: AVCaptureDevice) -> Double {
         let dur = CMTimeGetSeconds(d.activeVideoMinFrameDuration)
-        return dur > 0 ? Int32(max(1, min(120, (1 / dur).rounded()))) : 30
+        return dur > 0 ? max(1, min(120, (1 / dur).rounded())) : 30
     }
 
     private func selectMic(_ device: AVCaptureDevice?) {
@@ -795,8 +740,246 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if degraded { text += String(format: " / %.1f LIVE", measuredFPS) }
         text += " · \(format)"
         if drops > 0 { text += " · \(drops) DROP\(drops == 1 ? "" : "S")" }
-        feedStats.stringValue = text
-        feedStats.textColor = degraded ? NSColor.systemOrange : NSColor.white.withAlphaComponent(0.86)
+        feedStats.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: degraded ? NSColor.systemOrange : NSColor.white.withAlphaComponent(0.86)])
+    }
+
+    @objc private func openCapturePreferences() {
+        guard let device = current else { return }
+        let menu = NSMenu(title: "\(device.localizedName) capture settings")
+        let title = NSMenuItem(title: device.localizedName, action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        menu.addItem(Self.captureMenuHeading("FORMAT"))
+
+        let formats = device.formats.sorted {
+            let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+            if Int(a.width) != Int(b.width) { return a.width > b.width }
+            if Int(a.height) != Int(b.height) { return a.height > b.height }
+            return Self.maximumFrameRate($0) > Self.maximumFrameRate($1)
+        }
+        var seen: Set<String> = []
+        for format in formats {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let codec = Self.pixelFormatName(CMFormatDescriptionGetMediaSubType(format.formatDescription))
+            let maxRate = Self.maximumFrameRate(format)
+            let key = "\(dimensions.width)x\(dimensions.height):\(codec):\(maxRate)"
+            guard seen.insert(key).inserted else { continue }
+            let item = NSMenuItem(title: "\(dimensions.width)×\(dimensions.height) · \(codec) · up to \(Self.rateText(maxRate)) FPS",
+                                 action: #selector(pickCaptureFormat(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = format
+            item.state = format === device.activeFormat ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(Self.captureMenuHeading("FRAME RATE"))
+        for rate in Self.captureRates(for: device.activeFormat) {
+            let item = NSMenuItem(title: "\(Self.rateText(rate)) FPS", action: #selector(pickCaptureRate(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = NSNumber(value: rate)
+            item.state = abs(Double(fps) - rate) < 0.6 ? .on : .off
+            menu.addItem(item)
+        }
+
+        var controlCount = 0
+        controlCount += addCaptureModeMenu(to: menu, title: "FOCUS", current: Self.focusName(device.focusMode),
+                                           choices: [
+                                            ("Locked", "focus:locked", device.isFocusModeSupported(.locked)),
+                                            ("Auto", "focus:auto", device.isFocusModeSupported(.autoFocus)),
+                                            ("Continuous Auto", "focus:continuous", device.isFocusModeSupported(.continuousAutoFocus)),
+                                           ])
+        controlCount += addCaptureModeMenu(to: menu, title: "EXPOSURE", current: Self.exposureName(device.exposureMode),
+                                           choices: [
+                                            ("Locked", "exposure:locked", device.isExposureModeSupported(.locked)),
+                                            ("Auto", "exposure:auto", device.isExposureModeSupported(.autoExpose)),
+                                            ("Continuous Auto", "exposure:continuous", device.isExposureModeSupported(.continuousAutoExposure)),
+                                           ])
+        controlCount += addCaptureModeMenu(to: menu, title: "WHITE BALANCE", current: Self.whiteBalanceName(device.whiteBalanceMode),
+                                           choices: [
+                                            ("Locked", "whiteBalance:locked", device.isWhiteBalanceModeSupported(.locked)),
+                                            ("Auto", "whiteBalance:auto", device.isWhiteBalanceModeSupported(.autoWhiteBalance)),
+                                            ("Continuous Auto", "whiteBalance:continuous", device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance)),
+                                           ])
+        if controlCount == 0 {
+            menu.addItem(.separator())
+            let none = NSMenuItem(title: "No additional device controls exposed by macOS", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: feedStats.bounds.height), in: feedStats)
+    }
+
+    private static func captureMenuHeading(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    private func addCaptureModeMenu(to menu: NSMenu, title: String, current: String,
+                                    choices: [(String, String, Bool)]) -> Int {
+        let available = choices.filter { $0.2 }
+        guard !available.isEmpty else { return 0 }
+        if menu.items.last?.isSeparatorItem != true { menu.addItem(.separator()) }
+        let parent = NSMenuItem(title: "\(title) · \(current)", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for choice in available {
+            let item = NSMenuItem(title: choice.0, action: #selector(pickCaptureMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.1
+            submenu.addItem(item)
+        }
+        parent.submenu = submenu
+        menu.addItem(parent)
+        return 1
+    }
+
+    @objc private func pickCaptureFormat(_ item: NSMenuItem) {
+        guard let format = item.representedObject as? AVCaptureDevice.Format else { return }
+        setCaptureFormat(format)
+    }
+
+    @objc private func pickCaptureRate(_ item: NSMenuItem) {
+        guard let rate = (item.representedObject as? NSNumber)?.doubleValue, let device = current else { return }
+        setCaptureRate(rate, on: device)
+    }
+
+    @objc private func pickCaptureMode(_ item: NSMenuItem) {
+        guard let payload = item.representedObject as? String, let device = current else { return }
+        do {
+            try device.lockForConfiguration()
+            switch payload {
+            case "focus:locked": device.focusMode = .locked
+            case "focus:auto": device.focusMode = .autoFocus
+            case "focus:continuous": device.focusMode = .continuousAutoFocus
+            case "exposure:locked": device.exposureMode = .locked
+            case "exposure:auto": device.exposureMode = .autoExpose
+            case "exposure:continuous": device.exposureMode = .continuousAutoExposure
+            case "whiteBalance:locked": device.whiteBalanceMode = .locked
+            case "whiteBalance:auto": device.whiteBalanceMode = .autoWhiteBalance
+            case "whiteBalance:continuous": device.whiteBalanceMode = .continuousAutoWhiteBalance
+            default: break
+            }
+            device.unlockForConfiguration()
+        } catch {
+            say("Cannot change \(device.localizedName):\n\(error.localizedDescription)")
+        }
+    }
+
+    private func setCaptureFormat(_ format: AVCaptureDevice.Format) {
+        guard let device = current else { return }
+        if isRecording { stopRecording() }
+        queue.async {
+            self.session.beginConfiguration()
+            do {
+                try device.lockForConfiguration()
+                device.activeFormat = format
+                let saved = self.fps > 0 ? Double(self.fps) : Self.maximumFrameRate(format)
+                let rate = Self.supportedCaptureRate(saved, for: format)
+                let duration = Self.captureDuration(rate, for: format)
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.fps = Int32(rate.rounded())
+                    UserDefaults.standard.set(Self.captureFormatKey(format), forKey: Self.captureFormatPreference(device))
+                    UserDefaults.standard.set(rate, forKey: Self.captureRatePreference(device))
+                    self.resetFeedStats()
+                    self.updateFeedStatsVisibility()
+                }
+            } catch {
+                DispatchQueue.main.async { self.say("Cannot change \(device.localizedName):\n\(error.localizedDescription)") }
+            }
+            self.session.commitConfiguration()
+        }
+    }
+
+    private func setCaptureRate(_ rate: Double, on device: AVCaptureDevice) {
+        if isRecording { stopRecording() }
+        queue.async {
+            do {
+                try device.lockForConfiguration()
+                let supported = Self.supportedCaptureRate(rate, for: device.activeFormat)
+                let duration = Self.captureDuration(supported, for: device.activeFormat)
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.fps = Int32(supported.rounded())
+                    UserDefaults.standard.set(supported, forKey: Self.captureRatePreference(device))
+                    self.resetFeedStats()
+                    self.updateFeedStatsVisibility()
+                }
+            } catch {
+                DispatchQueue.main.async { self.say("Cannot change \(device.localizedName) frame rate:\n\(error.localizedDescription)") }
+            }
+        }
+    }
+
+    private static func captureRates(for format: AVCaptureDevice.Format) -> [Double] {
+        let canonical = [10.0, 12.0, 15.0, 20.0, 23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 90.0, 120.0]
+        var rates = canonical.filter { rate in
+            format.videoSupportedFrameRateRanges.contains { rate >= $0.minFrameRate - 0.1 && rate <= $0.maxFrameRate + 0.1 }
+        }
+        let minimum = format.videoSupportedFrameRateRanges.map(\.minFrameRate).min()
+        let maximum = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max()
+        if rates.isEmpty, let minimum { rates.append(minimum.rounded()) }
+        if let maximum, !rates.contains(where: { abs($0 - maximum) < 0.2 }) { rates.append(maximum) }
+        return rates.sorted()
+    }
+
+    private static func supportedCaptureRate(_ rate: Double, for format: AVCaptureDevice.Format) -> Double {
+        captureRates(for: format).first { abs($0 - rate) < 0.6 } ?? captureRates(for: format).last ?? rate
+    }
+
+    private static func captureDuration(_ rate: Double, for format: AVCaptureDevice.Format) -> CMTime {
+        guard let range = format.videoSupportedFrameRateRanges.min(by: { a, b in
+            let distance: (AVFrameRateRange) -> Double = { r in
+                rate < r.minFrameRate ? r.minFrameRate - rate : rate > r.maxFrameRate ? rate - r.maxFrameRate : 0
+            }
+            return distance(a) < distance(b)
+        }) else {
+            return CMTime(seconds: 1 / rate, preferredTimescale: 1_000_000)
+        }
+        if rate >= range.maxFrameRate - 0.05 { return range.minFrameDuration }
+        if rate <= range.minFrameRate + 0.05 { return range.maxFrameDuration }
+        return CMTime(seconds: 1 / rate, preferredTimescale: 1_000_000)
+    }
+
+    private static func maximumFrameRate(_ format: AVCaptureDevice.Format) -> Double {
+        format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+    }
+
+    private static func rateText(_ rate: Double) -> String {
+        rate.rounded() == rate ? "\(Int(rate))" : String(format: "%.2f", rate)
+    }
+
+    private static func captureFormatPreference(_ device: AVCaptureDevice) -> String {
+        "capture.format.\(device.uniqueID)"
+    }
+
+    private static func captureRatePreference(_ device: AVCaptureDevice) -> String {
+        "capture.rate.\(device.uniqueID)"
+    }
+
+    private static func captureFormatKey(_ format: AVCaptureDevice.Format) -> String {
+        let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        return "\(size.width)x\(size.height):\(CMFormatDescriptionGetMediaSubType(format.formatDescription))"
+    }
+
+    private static func focusName(_ mode: AVCaptureDevice.FocusMode) -> String {
+        switch mode { case .locked: return "Locked"; case .autoFocus: return "Auto"; case .continuousAutoFocus: return "Continuous Auto"; @unknown default: return "Other" }
+    }
+
+    private static func exposureName(_ mode: AVCaptureDevice.ExposureMode) -> String {
+        switch mode { case .locked: return "Locked"; case .autoExpose: return "Auto"; case .continuousAutoExposure: return "Continuous Auto"; case .custom: return "Custom"; @unknown default: return "Other" }
+    }
+
+    private static func whiteBalanceName(_ mode: AVCaptureDevice.WhiteBalanceMode) -> String {
+        switch mode { case .locked: return "Locked"; case .autoWhiteBalance: return "Auto"; case .continuousAutoWhiteBalance: return "Continuous Auto"; @unknown default: return "Other" }
     }
 
     private func recordMissingFrames(at pts: CMTime) {
@@ -1002,6 +1185,21 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 }
 
+// The camera and sound menus show at most eight characters of the chosen name.
+final class ShortPopUpCell: NSPopUpButtonCell {
+    override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
+        let text = title.string
+        if text.hasSuffix(Viewer.sliceSuffix) {
+            let short = "▯ " + String(text.dropLast(Viewer.sliceSuffix.count).prefix(6))
+            return super.drawTitle(NSAttributedString(string: short, attributes: title.attributes(at: 0, effectiveRange: nil)),
+                                   withFrame: frame, in: controlView)
+        }
+        let length = (String(text.prefix(8)) as NSString).length
+        return super.drawTitle(title.attributedSubstring(from: NSRange(location: 0, length: min(length, title.length))),
+                               withFrame: frame, in: controlView)
+    }
+}
+
 // MARK: v6, the local API (ApiServer.swift): the same functions as the window and the record key
 private func nn(_ x: Any?) -> Any { x ?? NSNull() }
 
@@ -1019,7 +1217,7 @@ extension Viewer {
     }
     func apiCameras() -> [[String: Any]] {
         devices.map { ["name": $0.localizedName, "id": $0.uniqueID, "slice": savedSlice($0),
-                       "current": $0.uniqueID == current?.uniqueID, "sony": KeepStreaming.isSony($0)] }
+                       "current": $0.uniqueID == current?.uniqueID, "sony": Cameras.isSony($0)] }
     }
     /// the menu's own action: camera by id or name (exact, then containing, case-insensitive), slice or not (else as remembered)
     func apiSetCamera(name: String?, id: String?, slice: Bool?) -> (ok: Bool, error: String) {

@@ -8,7 +8,8 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
   menu · ● record, in the top middle; the full-screen key (four corners) and ✕ at the top right.
 - **Video input statistics** appear at the top while both a camera and a sound input are active: negotiated resolution,
   target FPS, pixel format and dropped frames. If the feed falls behind, its live FPS appears beside the target in amber.
-  The line sits inside the dark input bar, immediately beside the record key.
+  The line sits inside the dark input bar, immediately beside the record key. Click it for capture-device preferences:
+  supported format, frame rate, focus, exposure and white-balance modes. Choices are kept per device.
 - **Two VU hairlines** down the left edge, left and right channel, 2 pt each and touching (v4), the meter of Mantra Manual
   Camera: dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
 - **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.
@@ -17,14 +18,8 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
   records. One-second fragments, so a crash loses a second.
 - **⌘F** or the corners key: full screen: the picture, the two meters (whole height) and the REC time code; only the bar
   goes. **Escape** goes back.
-- **Sony α7 V group** in the bar (v4): `REC | BAT | AF | F | shutter | ISO | name`. Camera and sound menus at the left,
-  cut to 8 characters. Over PTP (USB Cnct Mode = Remote Shoot/Trn.): REC toggles the camera's recording, AF green when
-  focused (press = half-press until green), a click on the picture = touch focus there, and on connect the camera's time
-  code is jammed to the Mac clock. While the Sony is the USB Streaming picture nothing can be controlled, so the group is
-  grey (see LESSONS 9). The PTP side is written but not yet tried on the camera (waits for the HDMI capture card).
-- **The Sony keeps streaming** (v4): a second capture session holds any connected Sony when it is not the chosen camera,
-  so it stays in Output, not Standby; it lets go before the picture opens it. A watchdog reopens a camera that sends no
-  frames for 3 s.
+- **No Sony tether.** Webcam Recorder never opens an ImageCapture/PTP session and never holds an unselected Sony open.
+  Sony remote shooting remains owned by the official Sony application.
 - **✕** quits (a running take is closed first). **PERMISSIONS** (amber) only while the camera or the microphone is refused.
 
 Installed as `/Applications/Webcam Recorder (Mantra).app`, bundle id `community.auroville.webcamviewer` (kept from v1 so the
