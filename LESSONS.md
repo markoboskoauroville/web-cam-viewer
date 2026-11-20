@@ -46,3 +46,7 @@
 19. **A chosen device is an identity, not a list position (v7):** v6 fell over to FaceTime when the Sony was unplugged because
     refresh() took index 0 when the remembered id was missing. Keep the id and the model name, wait, never substitute; the
     same for the microphone. A click that must open a menu steals the old click (touch focus): the old one moved to Option-click.
+20. **Video drops can be inferred but must not be counted twice (v9):** `AVCaptureVideoDataOutput` may report a dropped
+    sample and the next sample's presentation stamp may also reveal the same gap. Count the reported frames first, then
+    add only the excess missing from the timestamp gap. Actual FPS is measured from delivered frames per monotonic second;
+    resolution and format come from the live pixel buffer, not from the recording settings.

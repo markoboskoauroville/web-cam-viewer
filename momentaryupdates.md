@@ -55,3 +55,9 @@ Marko 13.11.2026: "Beatrice needs to guide me ... I say yes, and then it opens u
 ## 13.11.2026: camera and sound choice on a click; wait for the same camera
 Marko: "Please upgrade the webcam recorder so that when it's in a full screen or any screen, when I click on the image, I want to see a choice of the camera and a choice of the sound. That's what I want with the web thing. If I unplug some camera, I don't want that. This goes to another camera. It waits, and if the same camera is plugged in again, it continues playing."
 **Status (13.11.2026): built as v7 (not yet seen by Marko).** Saved first (read as: v7: a click on the picture (any size, full screen too) opens an overlay with the CAMERA list (each with its vertical slice) and the SOUND input list, like the classroom page's menu; an unplugged camera never falls over to another one: the picture shows "Waiting for <camera>…", and when the same camera (same unique id) comes back it continues by itself.)
+
+## 20.11.2026: video-input statistics at the top
+Marko: "Please update my application. We call it Webcam Recorder Mantra. I need at the top, when there is a video device and there is a sound device, to have also statistical info about the video input, and that is very simple: frame rate and current frame rate if there are drops and resolution and other data about the video feed."
+**Status (20.11.2026): built as v9.** The live strip shows resolution, target FPS, live FPS when degraded, pixel format and
+dropped frames only while camera and sound are both active; it remains at the top in full screen and is exposed through the
+local `/status` API.

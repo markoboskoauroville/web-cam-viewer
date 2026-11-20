@@ -1,5 +1,11 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 20.11.2026: v9 = live video-input statistics.** When a camera and sound input are both active, a compact
+strip just below the input bar shows the source frame's resolution, target frame rate, pixel format and dropped-frame
+count. A live frame rate is added in amber when delivery is degraded. AVFoundation drop notifications and presentation
+timestamp gaps are combined without double-counting. The strip moves to the top of the picture in full screen. `GET
+/status` exposes the same values as `feed.active`, `width`, `height`, `format`, `currentFPS` and `droppedFrames`.
+
 **State 13.11.2026: v5 = vertical slice (built by GitHub, not yet seen by Marko).** v4 was the last Mac build; since v5 the
 workflow `.github/workflows/build.yml` (from MANTRA_MANIFEST/workflows/mac-swift.yml; also makes the DMG the site needs) compiles on a push to main
 and releases v<N> (app.zip + MantraWebcamRecorder-<N>.dmg) as Latest. Nothing compiles on the Mac.

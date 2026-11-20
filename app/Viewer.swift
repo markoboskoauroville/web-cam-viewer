@@ -42,6 +42,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let message = NSTextField(labelWithString: "")
     private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
+    private let feedStats = NSTextField(labelWithString: "")
+    private var feedStatsTop: NSLayoutConstraint!
     private var devices: [AVCaptureDevice] = []
     // v5: every camera is followed by its "· vertical slice" entry; an entry is (camera index, slice?)
     private var entries: [(device: Int, slice: Bool)] = []
@@ -71,10 +73,24 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let videoOut = AVCaptureVideoDataOutput()
     private let audioOut = AVCaptureAudioDataOutput()
     private var fps: Int32 = 30
+    private var measuredFPS = 0.0
+    private var measuredDrops = 0
+    private var feedWidth = 0
+    private var feedHeight = 0
+    private var feedPixelFormat = "—"
     private var lastAudioFormat: CMFormatDescription?   // capture queue
     private var recorder: Recorder?                     // capture queue
     private var tcTimer: Timer?
+    private var statsTimer: Timer?
     private var liveFrames = 0          // capture queue: frames of the chosen camera
+    private var droppedFrames = 0       // capture queue: dropped frames since the camera was selected
+    private var pendingDroppedFrames = 0
+    private var lastVideoPTS = CMTime.invalid
+    private var capturedWidth = 0
+    private var capturedHeight = 0
+    private var capturedPixelFormat = "—"
+    private var statsLastFrames = 0
+    private var statsLastUpdate = ProcessInfo.processInfo.systemUptime
     private var watchdog: Timer?
     private var lastSeen = 0
     private var silentTicks = 0
@@ -108,6 +124,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
         // have held it when it was chosen)
         watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkFrames() }
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateFeedStats() }
     }
 
     // MARK: the Sony (v4): the group in the bar while it is connected, a click on the picture a touch on its screen
@@ -361,6 +378,17 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         timecode.setAccessibilityIdentifier("timecode")
         content.addSubview(timecode)
 
+        // Live input facts: below the normal bar, and at the top in full screen.
+        feedStats.translatesAutoresizingMaskIntoConstraints = false
+        feedStats.isHidden = true
+        feedStats.alignment = .right
+        feedStats.lineBreakMode = .byClipping
+        feedStats.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        feedStats.textColor = NSColor.white.withAlphaComponent(0.86)
+        feedStats.shadow = sh
+        feedStats.setAccessibilityIdentifier("video-stats")
+        content.addSubview(feedStats)
+
         content.addSubview(bar)   // last: over the picture
         overlay.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(overlay, positioned: .below, relativeTo: bar)   // the bar stays usable over it
@@ -417,12 +445,17 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             timecode.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             timecode.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
 
+            feedStats.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            feedStats.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 12),
+
             message.centerXAnchor.constraint(equalTo: picture.centerXAnchor),
             message.centerYAnchor.constraint(equalTo: picture.centerYAnchor),
             message.widthAnchor.constraint(lessThanOrEqualTo: picture.widthAnchor, constant: -32),
         ])
         meterTop = meter.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
         meterTop.isActive = true
+        feedStatsTop = feedStats.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 7)
+        feedStatsTop.isActive = true
         NotificationCenter.default.addObserver(self, selector: #selector(layoutPreview), name: NSView.frameDidChangeNotification, object: picture)
         picture.postsFrameChangedNotifications = true
 
@@ -461,16 +494,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
         meterTop.constant = 0   // the meters the whole height
+        feedStatsTop.constant = 7
         NSCursor.setHiddenUntilMouseMoves(true)
     }
     @objc private func leftFull() {
         overlays.forEach { $0.isHidden = false }
         meterTop.constant = Self.barHeight
+        feedStatsTop.constant = Self.barHeight + 7
     }
 
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
+        statsTimer?.invalidate(); statsTimer = nil
         keepStreaming.stop()
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
@@ -612,6 +648,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         popup.isEnabled = !devices.isEmpty
         popup.selectItem(at: -1)
         say("Waiting for \(wantedName ?? "the camera")…")
+        updateFeedStatsVisibility()
         updateSonyBar()
         holdSony()
     }
@@ -631,6 +668,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if isRecording { stopRecording() }   // a take never changes camera halfway
         current = device
         waiting = false
+        resetFeedStats()
+        updateFeedStatsVisibility()
         applyMode(device.map { savedSlice($0) } ?? false)
         updateSonyBar()
         holdSony()
@@ -698,6 +737,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func selectMic(_ device: AVCaptureDevice?) {
         if isRecording { stopRecording() }
         currentMic = device
+        updateFeedStatsVisibility()
         if let device { UserDefaults.standard.set(device.uniqueID, forKey: "sound"); UserDefaults.standard.set(device.localizedName, forKey: "soundName") }
         meter.dead = device == nil || !micAllowed
         queue.async {
@@ -708,6 +748,91 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             }
             self.session.commitConfiguration()
             self.captureQueue.async { self.lastAudioFormat = nil }
+        }
+    }
+
+    private func updateFeedStatsVisibility() {
+        feedStats.isHidden = current == nil || currentMic == nil || waiting || micWaiting || !cameraAllowed || !micAllowed
+        if !feedStats.isHidden { updateFeedStats() }
+    }
+
+    private func resetFeedStats() {
+        captureQueue.async {
+            self.liveFrames = 0
+            self.droppedFrames = 0
+            self.pendingDroppedFrames = 0
+            self.lastVideoPTS = .invalid
+            self.capturedWidth = 0
+            self.capturedHeight = 0
+            self.capturedPixelFormat = "—"
+        }
+        statsLastFrames = 0
+        statsLastUpdate = ProcessInfo.processInfo.systemUptime
+        measuredFPS = 0
+        measuredDrops = 0
+        feedWidth = 0
+        feedHeight = 0
+        feedPixelFormat = "—"
+    }
+
+    private func updateFeedStats() {
+        guard current != nil else { return }
+        var frames = 0, drops = 0, width = 0, height = 0, format = "—"
+        captureQueue.sync {
+            frames = self.liveFrames
+            drops = self.droppedFrames
+            width = self.capturedWidth
+            height = self.capturedHeight
+            format = self.capturedPixelFormat
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = now - statsLastUpdate
+        if elapsed > 0 {
+            measuredFPS = frames >= statsLastFrames ? Double(frames - statsLastFrames) / elapsed : 0
+            statsLastFrames = frames
+            statsLastUpdate = now
+        }
+        measuredDrops = drops
+        feedWidth = width
+        feedHeight = height
+        feedPixelFormat = format
+        guard !feedStats.isHidden else { return }
+        let degraded = drops > 0 || (measuredFPS > 0 && measuredFPS + 0.9 < Double(fps))
+        var text = ""
+        if width > 0, height > 0 { text += "\(width)×\(height) · " }
+        text += "\(fps) FPS"
+        if degraded { text += String(format: " / %.1f LIVE", measuredFPS) }
+        text += " · \(format)"
+        if drops > 0 { text += " · \(drops) DROP\(drops == 1 ? "" : "S")" }
+        feedStats.stringValue = text
+        feedStats.textColor = degraded ? NSColor.systemOrange : NSColor.white.withAlphaComponent(0.86)
+    }
+
+    private func recordMissingFrames(at pts: CMTime) {
+        guard pts.isNumeric, lastVideoPTS.isNumeric else { lastVideoPTS = pts; return }
+        let gap = CMTimeGetSeconds(pts - lastVideoPTS)
+        let expected = 1 / max(1, Double(fps))
+        if gap > expected * 1.5 {
+            let inferred = max(0, Int((gap / expected).rounded()) - 1)
+            droppedFrames += max(0, inferred - pendingDroppedFrames)
+        }
+        pendingDroppedFrames = 0
+        lastVideoPTS = pts
+    }
+
+    private static func pixelFormatName(_ type: OSType) -> String {
+        switch type {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+            return "420v"
+        case kCVPixelFormatType_422YpCbCr8: return "422v"
+        case kCVPixelFormatType_32BGRA: return "BGRA"
+        case kCVPixelFormatType_32ARGB: return "ARGB"
+        case kCVPixelFormatType_24RGB: return "RGB"
+        case kCVPixelFormatType_OneComponent8: return "Y8"
+        default:
+            var n = type.bigEndian
+            return String(bytes: Data(bytes: &n, count: MemoryLayout<OSType>.size), encoding: .ascii)?
+                .trimmingCharacters(in: .controlCharacters) ?? "0x\(String(type, radix: 16))"
         }
     }
 
@@ -777,6 +902,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             DispatchQueue.main.async { self.lastLevels = rms; self.meter.setLevels(rms) }
         } else {
             liveFrames &+= 1
+            recordMissingFrames(at: CMSampleBufferGetPresentationTimeStamp(sb))
+            if let pb = CMSampleBufferGetImageBuffer(sb) {
+                capturedWidth = CVPixelBufferGetWidth(pb)
+                capturedHeight = CVPixelBufferGetHeight(pb)
+                capturedPixelFormat = Self.pixelFormatName(CVPixelBufferGetPixelFormatType(pb))
+            }
             if sliceOn, let v = slicer.slice(sb) {
                 // v5: the vertical frame is what is shown and what is recorded; ASAP display, the recorder keeps the stamps
                 if let a = CMSampleBufferGetSampleAttachmentsArray(v, createIfNecessary: true) as? [NSMutableDictionary] {
@@ -787,6 +918,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             } else if !sliceOn { recorder?.appendVideo(sb) }
             if selftesting { selftestFrame(sb) }
         }
+    }
+
+    func captureOutput(_ o: AVCaptureOutput, didDrop sb: CMSampleBuffer, from c: AVCaptureConnection) {
+        guard o === videoOut else { return }
+        let count = max(1, CMSampleBufferGetNumSamples(sb))
+        droppedFrames += count
+        pendingDroppedFrames += count
     }
 
     // MARK: selftest (the app checks itself: frames arrive and the picture moves)
@@ -884,6 +1022,8 @@ extension Viewer {
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
                 "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "1920x1080",
+                "feed": ["width": feedWidth, "height": feedHeight, "format": feedPixelFormat,
+                         "active": !feedStats.isHidden, "currentFPS": measuredFPS, "droppedFrames": measuredDrops],
                 "levels": lastLevels.map { Double($0) }]
     }
     func apiCameras() -> [[String: Any]] {
