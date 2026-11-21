@@ -1,6 +1,6 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
-**State 21.11.2026: v23 → v26 = the sound is really in the take; the Sony diagnosis is honest; USB control road; updater.**
+**State 21.11.2026: v23 → v27 = the sound is really in the take; the Sony diagnosis is honest; USB control road; updater.**
 Marko: "It doesn't record the sound first ... It's on Wi-Fi, and the application says it's not on Wi-Fi. Please make it connect
 to the camera and remotely control it." (word for word in momentaryupdates.md). Skill: ~/.claude/skills/webcam-recorder.
 - **Sound (v23).** v13 to v22 wrote all of a take's sound in one block at Stop (a raw H.264 pipe has no time stamps and ffmpeg 9
@@ -10,8 +10,10 @@ to the camera and remotely control it." (word for word in momentaryupdates.md). 
   tools/check_take.py: first take after launch 2560x1440 HIGH, LOW, 60 s and 240 s slice HIGH, UGREEN HDMI audio (2 ch), a take
   started right after switching the input, and a kill -9 at 30 s: every one max lag 0.0 s, audio end within 0.05 s of the
   video end, packets = expected (240 s: 11260 / 11258), decodes clean.
-- **Warnings (v23/v24/v26).** No sound buffers for 2 s, a format change, a write error, an input with no buffers at start, or
-  only digital zeros for 3 s = red banner under the bar (its own wrapping line) and `/status soundWarning`.
+- **Warnings (v23/v24/v26/v27).** No sound buffers for 2 s, a format change, a write error, an input with no buffers at start,
+  or only digital zeros for 3 s = red banner under the bar (its own wrapping line; it pushes the Sony overlay down) and
+  `/status soundWarning`. Proven on v27: NDI Audio (zeros) → "the sound input sends only SILENCE (digital zero)" at 3 s,
+  window captured with the Sony overlay open. The "no buffers" path is built but not fired on the body (no input does that).
 - **Capture mode (v24/v25).** The remembered capture format (2560x1440 30) came back as 1920x1080 at every launch and after every
   sound-input change (session preset re-applied on each commit; LESSONS 36). Restored after each commit; checked on v25 by
   launch and by re-selecting the sound input.

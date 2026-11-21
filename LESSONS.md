@@ -116,3 +116,10 @@
     1920x1080: EVERY later commitConfiguration re-applies the preset, and the sound input is added after the camera (proven
     on v24 through the API: /capture 2560x1440 → /sound same input → 1920x1080). v25 restores the saved format after each
     commit (reapplySavedCapture). Test a restore by relaunching and by re-selecting the sound input, not by one launch.
+37. **"Buffers arrive" is not "sound arrives" (v26).** NDI Audio with no source delivers buffers of exact zeros: the v23
+    no-buffer check stayed quiet while the take recorded -91 dB. Exact digital zero for 3 s is now a warning; a real
+    microphone always has a noise floor (about -45 dB in his room), so a quiet room never triggers it. Prove a warning by
+    making it fire on the installed app (an input that sends zeros) and capturing the window, not by reading the code.
+38. **A new overlay element must be checked against every other overlay (v27).** The v26 sound banner sat on the Sony
+    overlay's CONNECT row when both were open. Capture the window with every overlay open together; the banner now pushes
+    the Sony overlay down by its own wrapped height.
