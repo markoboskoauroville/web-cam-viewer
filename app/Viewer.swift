@@ -826,22 +826,28 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 DispatchQueue.main.async { self.say("Cannot configure \(device.localizedName):\n\(error.localizedDescription)") }
             }
             if !self.session.isRunning { self.session.startRunning() }
-            // v24: startRunning applies the session preset (hd1920x1080) over the saved format, so a remembered
-            // 2560x1440 came back as 1920x1080 at every launch; the saved format and rate are put back once running
-            if let wanted = UserDefaults.standard.string(forKey: Self.captureFormatPreference(device)),
-               Self.captureFormatKey(device.activeFormat) != wanted,
-               let format = device.formats.first(where: { Self.captureFormatKey($0) == wanted }),
-               (try? device.lockForConfiguration()) != nil {
-                device.activeFormat = format
-                let savedRate = UserDefaults.standard.double(forKey: Self.captureRatePreference(device))
-                let rate = savedRate > 0 ? Self.supportedCaptureRate(savedRate, for: format) : Self.currentWholeFrameRate(device)
-                let duration = Self.captureDuration(rate, for: format)
-                device.activeVideoMinFrameDuration = duration
-                device.activeVideoMaxFrameDuration = duration
-                device.unlockForConfiguration()
-                self.fps = Int32(rate.rounded())
-            }
+            self.reapplySavedCapture()
         }
+    }
+
+    /// v24/v25 (session queue): startRunning and every later commitConfiguration (e.g. adding the sound input) apply the
+    /// session preset (hd1920x1080) over the saved format, so a remembered 2560x1440 came back as 1920x1080 at every launch.
+    /// After each of them the saved format and rate of the camera are put back when they differ.
+    private func reapplySavedCapture() {
+        guard let device = videoIn?.device,
+              let wanted = UserDefaults.standard.string(forKey: Self.captureFormatPreference(device)),
+              let format = device.formats.first(where: { Self.captureFormatKey($0) == wanted }) else { return }
+        let savedRate = UserDefaults.standard.double(forKey: Self.captureRatePreference(device))
+        let rate = savedRate > 0 ? Self.supportedCaptureRate(savedRate, for: format) : Self.currentWholeFrameRate(device)
+        let duration = Self.captureDuration(rate, for: format)
+        if Self.captureFormatKey(device.activeFormat) == wanted && device.activeVideoMinFrameDuration == duration { return }
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.activeFormat = format
+        device.activeVideoMinFrameDuration = duration
+        device.activeVideoMaxFrameDuration = duration
+        device.unlockForConfiguration()
+        fps = Int32(rate.rounded())
+        NSLog("Webcam Recorder: capture format put back to %@ at %.0f FPS", wanted, rate)
     }
 
     /// v5: horizontal (the camera's own preview) or vertical slice (the sliced frames); the window fits the picture
@@ -882,6 +888,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 self.session.addInput(input); self.audioIn = input
             }
             self.session.commitConfiguration()
+            self.reapplySavedCapture()   // v25: this commit re-applied the preset too (the sound input comes after the camera)
             self.captureQueue.async { self.lastAudioFormat = nil }
         }
     }

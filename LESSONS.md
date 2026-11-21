@@ -73,3 +73,46 @@
 27. **bezelColor is not a state marker (v22).** A rounded NSButton's bezelColor set after the window was shown did not redraw
     while the window was inactive (the demo test window never takes focus), so the current Picture Profile looked unmarked.
     A layer border plus a coloured attributed title shows the state in every window state.
+28. **A raw H.264 pipe starves the sound in ffmpeg 9 (v13 to v22, found 21.11.2026).** Annex B on stdin has no time stamps;
+    with a second input (PCM in a FIFO) ffmpeg 9's scheduler stopped reading the FIFO until the video ended, so the whole
+    take's sound was written in one block at Stop behind the video (60 s take: 50 s lag; Marko's 237 s take: 227 s). ffmpeg
+    decodes such a file, so `volumedetect` said "sound present" and the bug hid; IINA and DaVinci Resolve read in file order
+    and lost the sound after 0.3 s, and a crash would have lost all of it. Proven in a stand-alone simulation (the app's exact
+    ffmpeg line fed in real time): raw H.264 → 9.9 to 19.9 s lag, one FIFO write blocked 17.8 s; the same video in MPEG-TS or
+    FLV → lag 0.0. `-fflags +genpts`, a small probe or `-max_interleave_delta` do not help. Fix (v23): the app writes FLV tags
+    (avcC sequence header, AVCC frames, the capture clock's millisecond stamps) to the pipe, `-f flv -i pipe:0`.
+29. **Never judge a take's sound by decoding it; check it in file order.** `tools/check_take.py <take>`: max lag (newest
+    video pts written so far minus each audio packet's pts, in file order) ≤ 1.0 s, audio length = video length, packet
+    count vs 1024-sample AAC packets expected, default flags, levels. Every version that touches Recorder runs it on a 60 s
+    and a 240 s take in slice + HIGH, plus a hard kill at about 30 s.
+30. **The FIFO open must be on the writer's own queue (v23).** v22 opened the audio FIFO on another queue and dropped every
+    PCM buffer that came before ffmpeg had opened it (ffmpeg probes input 0 first): the first 1.0 to 1.7 s of sound were lost
+    (worst at LOW: the video pipe fills the probe slowest) and the sound started early against the picture. Now the open is
+    the first block on the writer queue, later writes wait behind it, and the first sample written is the one at the first
+    video frame's time (cut before it, silence if the sound starts later).
+31. **A take must say when its sound is missing (v23/v24, silent-failure.md).** No buffer for 2 s, a format change in the
+    middle, a write error, or a sound input chosen but no format yet (the start waits up to 1.5 s for the first buffer) =
+    a red banner under the bar and `/status soundWarning`. The bar's statistics key is clipped in a narrow window (it showed
+    only "2" at 883 pt), so a warning never relies on it: it has its own wrapping line.
+32. **A remux with `-c copy` does not repair a badly interleaved MKV.** It reads in file order, so the 10 s interleave limit
+    leaves the lag (9.86 s on the simulated file). Read the file twice: `ffmpeg -i in.mkv -i in.mkv -map 0:v -map 1:a -c copy
+    -disposition:v:0 default -disposition:a:0 default out.mkv` → lag 0.0 (tested on the simulated broken file).
+33. **"Not on Wi-Fi" was a lie by omission (v22, 21.11.2026).** The camera answered ping at 192.168.1.100 (MAC
+    80:99:9B:13:AD:3F, the same as its MENU → Network → Wi-Fi → Display Wi-Fi Info.), but 15740, 22, 64321, 80 and 443 were
+    closed and no SSDP came, because its remote control was on the USB cable: IOKit showed the PTP interface (class 6) with
+    `UsbExclusiveOwner = "pid 4939, Remote"`. One "not found" hid all that. Now SonyDiag measures five stages (Mac LAN; ping +
+    ARP; SSDP; 15740/22; USB + owner) and says only what it measured.
+34. **One program holds the camera's USB PTP at a time.** Imaging Edge Remote takes the interface exclusively; ImageCaptureCore
+    in our app then cannot open a session. The app never closes Remote by itself: TAKE CONTROL (Marko's press, or POST
+    /sony/takecontrol on an explicit request) asks Remote to quit like its own Quit, then connects over USB. SNAP opens Remote,
+    so while SONY holds the cable S says "DISCONNECT first" instead of opening a Remote that would meet a busy camera.
+35. **α7 V menu names are not the old ones (ILCE-7M5 Help Guide, helpguide.sony.net/ilc/2540, 21.11.2026).** Wi-Fi remote:
+    MENU → Network → [Cnct./Remote Sht.] → [Remote Shoot Function] → [Remote Shooting] → [On], with MENU → Network → [Wi-Fi] →
+    [Wi-Fi Connect] → [On]; credentials MENU → Network → [Network Option] → [Access Authen. Info]; USB: MENU → Setup → [USB] →
+    [USB Cnct Mode (PORT1)] → [Remote Shoot/Trn.]. There is no "PC Remote Function" / "PC Remote Cnct Method" on this body.
+36. **startRunning applies the session preset over a saved format (macOS).** activeFormat set before startRunning with the
+    preset hd1920x1080 came back as 1920x1080 at every launch, so Marko's remembered 2560x1440 was lost on each relaunch
+    (it was right only after he picked it while running). v24 put it back after startRunning, and it still came back
+    1920x1080: EVERY later commitConfiguration re-applies the preset, and the sound input is added after the camera (proven
+    on v24 through the API: /capture 2560x1440 → /sound same input → 1920x1080). v25 restores the saved format after each
+    commit (reapplySavedCapture). Test a restore by relaunching and by re-selecting the sound input, not by one launch.
