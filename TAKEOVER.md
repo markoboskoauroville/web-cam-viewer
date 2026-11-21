@@ -9,6 +9,8 @@ Final disk verification: on the live 1920×1080 20 FPS UGREEN feed, LOW/MID/HIGH
 their five-second files were Matroska + H.264 High/yuv420p + AAC, exactly 1920×1080 and 20.0 FPS, with all frames decoded.
 The static-scene CBR files measured about 5.84/14.83/29.87 Mb/s at the video-plus-overhead probe (about 10% below target).
 
+**State 21.11.2026: v19 = folder name on the bar.** Marko: "Next to folder, give me the name of the last folder, not the whole path." The F key shows the last component of the recordings folder (e.g. Movies) before its icon; the tooltip has the full path; it updates when the folder is chosen.
+
 **State 21.11.2026: v18 = remembered state, no "Sony camera not found".** Marko: the "Sony camera not found / press ENABLE" text annoyed him (he works through a UGREEN HDMI-to-USB adapter, the camera is fine): all camera hints in Snap.swift are removed. "The whole state should be remembered": the recordings folder is now chosen (right-click or Option-click F → Choose folder…) and remembered (`recordFolder`, default ~/Movies; used by Record and the free-space time); snapped state is remembered and restored at the next start if the remote is still open (`snapped`; never opens the remote by itself). Already remembered: window frame, camera, sound, quality, capture format and rate per device.
 
 **State 21.11.2026: v17 = S and F beside full screen.** Marko: "Snap should be the small button next to the full screen button" and "Next to S I need F; F is giving me the folder where I'm recording my videos." The bar's right side is now: PERMISSIONS (when needed), F (folder icon, opens ~/Movies with the newest take selected), S (snap icon, green while snapped), full screen, ✕. The SNAP REMOTE text key is gone from the left group.

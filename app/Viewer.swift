@@ -280,7 +280,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // v17: F opens the folder the takes are written to (~/Movies), beside S
         folderKey.translatesAutoresizingMaskIntoConstraints = false
         folderKey.isBordered = false
-        folderKey.imagePosition = .imageOnly
+        folderKey.imagePosition = .imageTrailing
+        folderKey.lineBreakMode = .byTruncatingMiddle
         folderKey.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Recordings folder")?
             .withSymbolConfiguration(.init(pointSize: 15, weight: .semibold))
         folderKey.contentTintColor = .secondaryLabelColor
@@ -291,6 +292,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         fm.addItem(withTitle: "Open recordings folder", action: #selector(openFolderMenu), keyEquivalent: "").target = self
         fm.addItem(withTitle: "Choose folder…", action: #selector(chooseFolder), keyEquivalent: "").target = self
         folderKey.menu = fm
+        updateFolderKey()
 
         let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
@@ -421,7 +423,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             snapKey.widthAnchor.constraint(equalToConstant: 30), snapKey.heightAnchor.constraint(equalToConstant: 30),
             folderKey.trailingAnchor.constraint(equalTo: snapKey.leadingAnchor, constant: -4),
             folderKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            folderKey.widthAnchor.constraint(equalToConstant: 30), folderKey.heightAnchor.constraint(equalToConstant: 30),
+            folderKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 30), folderKey.widthAnchor.constraint(lessThanOrEqualToConstant: 170), folderKey.heightAnchor.constraint(equalToConstant: 30),
             permissions.trailingAnchor.constraint(equalTo: folderKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
@@ -485,12 +487,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         snapKey.setAccessibilityLabel(on ? "Unsnap the Sony remote" : "Snap the Sony remote")
     }
 
+    /// v19: the name of the last folder (not the path) stands beside the folder icon
+    private func updateFolderKey() {
+        folderKey.attributedTitle = NSAttributedString(string: Recorder.folder.lastPathComponent + " ", attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
+        folderKey.toolTip = "Recordings go to \(Recorder.folder.path). Click: open it. Right-click or Option-click: choose another folder (remembered)"
+    }
     @objc private func openFolderMenu() { revealFolder() }
     @objc private func chooseFolder() {
         let p = NSOpenPanel()
         p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
         p.prompt = "Record here"; p.directoryURL = Recorder.folder
-        if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "recordFolder"); updateQualityKey() }
+        if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "recordFolder"); updateQualityKey(); updateFolderKey() }
     }
     @objc private func openFolder() {
         if NSEvent.modifierFlags.contains(.option) { chooseFolder() } else { revealFolder() }
