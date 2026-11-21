@@ -38,6 +38,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let qualityKey = NSButton()
     private let snapKey = NSButton()
     private let folderKey = NSButton()
+    // v21: the SONY key and its overlay (our own PTP control of the α7 V over Wi-Fi)
+    private let sonyKey = NSButton()
+    private let sonyLink = SonyLink()
+    private lazy var sonyPanel = SonyPanel(link: sonyLink)
+    private var sonyTop: NSLayoutConstraint!
     private var snapper: SnapRemote!
     private let closeButton = NSButton()
     private let fullKey = FullKey()
@@ -294,6 +299,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         folderKey.menu = fm
         updateFolderKey()
 
+        // v21, Marko 21.11.2026: "I need to have button Sony control, and all its icons and pop up menus you overlay over my
+        // image ... and I can change all the settings inside my own window". SONY toggles the overlay (remembered);
+        // Option-click opens it with the demo camera.
+        sonyKey.translatesAutoresizingMaskIntoConstraints = false
+        sonyKey.isBordered = false
+        sonyKey.target = self; sonyKey.action = #selector(sonyTapped)
+        sonyKey.setAccessibilityIdentifier("sony")
+        sonyKey.setContentHuggingPriority(.required, for: .horizontal)
+        sonyLink.onChange = { [weak self] in self?.sonyPanel.update(); self?.updateSonyKey() }
+        sonyPanel.onClose = { [weak self] in self?.setSony(false) }
+        updateSonyKey()
+
         let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
@@ -331,6 +348,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         bar.addSubview(fullKey)
         bar.addSubview(snapKey)
         bar.addSubview(folderKey)
+        bar.addSubview(sonyKey)
 
         picture.translatesAutoresizingMaskIntoConstraints = false
         picture.wantsLayer = true
@@ -380,6 +398,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         content.addSubview(bar)   // last: over the picture
         overlay.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(overlay, positioned: .below, relativeTo: bar)   // the bar stays usable over it
+        sonyPanel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(sonyPanel, positioned: .below, relativeTo: bar)  // under the bar, never over it
+        sonyTop = sonyPanel.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
+        NSLayoutConstraint.activate([sonyTop, sonyPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sonyPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: StereoMeter.width),
+            sonyPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: content.topAnchor), overlay.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             overlay.leadingAnchor.constraint(equalTo: content.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
@@ -392,6 +416,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             guard let self, e.window === self.window else { return e }
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if e.keyCode == 53, !self.sonyPanel.isHidden { self.setSony(false); return nil }   // Escape hides the Sony controls
             if e.keyCode == 53, !self.overlay.isHidden { self.overlay.close(); return nil }   // Escape closes the choice
             if e.keyCode == 53, self.isFull { self.toggleFull(); return nil }   // Escape
             return e
@@ -424,7 +449,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             folderKey.trailingAnchor.constraint(equalTo: snapKey.leadingAnchor, constant: -4),
             folderKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             folderKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 30), folderKey.widthAnchor.constraint(lessThanOrEqualToConstant: 170), folderKey.heightAnchor.constraint(equalToConstant: 30),
-            permissions.trailingAnchor.constraint(equalTo: folderKey.leadingAnchor, constant: -8),
+            sonyKey.trailingAnchor.constraint(equalTo: folderKey.leadingAnchor, constant: -4),
+            sonyKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            sonyKey.heightAnchor.constraint(equalToConstant: 30), sonyKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            permissions.trailingAnchor.constraint(equalTo: sonyKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             picture.topAnchor.constraint(equalTo: content.topAnchor),
@@ -473,6 +501,39 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
         layoutPreview()
         snapper.restore()
+        if CommandLine.arguments.contains("--sony-demo") { setSony(true, connect: false, remember: false); sonyLink.startDemo() }
+        else if UserDefaults.standard.bool(forKey: "sony.overlay") { setSony(true) }   // remembered open: find the last camera again
+    }
+
+    // MARK: v21, the SONY key and overlay
+    @objc private func sonyTapped() {
+        if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+            setSony(true, connect: false)
+            if !sonyLink.connected { sonyLink.startDemo() }
+            return
+        }
+        setSony(sonyPanel.isHidden)
+    }
+
+    private func setSony(_ open: Bool, connect: Bool = true, remember: Bool = true) {
+        sonyPanel.isHidden = !open
+        if remember && !test { UserDefaults.standard.set(open, forKey: "sony.overlay") }
+        if open {
+            if !overlay.isHidden { overlay.close() }
+            sonyPanel.update()
+            if connect, !sonyLink.connected, [SonyLink.Phase.idle, .notFound, .failed].contains(sonyLink.phase) { sonyLink.findAndConnect() }
+        }
+        updateSonyKey()
+    }
+
+    private func updateSonyKey() {
+        let open = !sonyPanel.isHidden, on = sonyLink.connected
+        let color: NSColor = on ? .systemGreen : open ? .white : .secondaryLabelColor
+        sonyKey.attributedTitle = NSAttributedString(string: on ? "SONY ●" : "SONY", attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: color])
+        sonyKey.setAccessibilityLabel(open ? "Hide the Sony camera controls" : "Show the Sony camera controls")
+        sonyKey.toolTip = (open ? "Hide the Sony controls (Escape)" : "Sony camera controls over the picture: Picture Profile, white balance, focus, REC …")
+            + (on ? " · connected to \(sonyLink.found?.model ?? "the Sony")" : "") + " · Option-click: demo camera"
     }
 
     @objc private func snapTapped() { snapper.toggle() }
@@ -520,17 +581,20 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func toggleFull() { window.toggleFullScreen(nil) }
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
+        sonyTop.constant = 0
         meterTop.constant = 0   // the meters the whole height
         NSCursor.setHiddenUntilMouseMoves(true)
     }
     @objc private func leftFull() {
         overlays.forEach { $0.isHidden = false }
+        sonyTop.constant = Self.barHeight
         meterTop.constant = Self.barHeight
     }
 
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
+        sonyLink.shutdown()
         statsTimer?.invalidate(); statsTimer = nil
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }

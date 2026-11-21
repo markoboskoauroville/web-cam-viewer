@@ -14,7 +14,8 @@ import AVFoundation
 
 // v3: two VU hairlines, left and right channel, side by side on the left edge; the record key shows a see-through
 // red under the mouse.
-let VERSION = 20
+// v21 (21.11.2026): the SONY key: our own Sony PTP control of the α7 V as an overlay over the picture (Sony*.swift).
+let VERSION = 21
 let NAME = "Webcam Recorder (Mantra)"
 
 final class Delegate: NSObject, NSApplicationDelegate {
@@ -37,6 +38,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let m = NSMenu()
         m.addItem(withTitle: "Quit \(NAME)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = m
+        // v21: the Sony overlay has text fields (address, user, password): ⌘X ⌘C ⌘V ⌘A must work in them
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let e = NSMenu(title: "Edit")
+        e.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        e.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        e.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        e.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = e
         NSApp.mainMenu = main
     }
 }
@@ -46,6 +55,21 @@ enum Main {
     static let delegate = Delegate()
     static func main() {
         let a = CommandLine.arguments
+        // v21, SSH_ASKPASS: /usr/bin/ssh runs this same program to ask for the Sony's password; print it and leave.
+        // A yes/no host question is never answered yes here: the fingerprint is approved in the overlay.
+        let env = ProcessInfo.processInfo.environment
+        if let pw = env["WCR_SONY_ASKPASS"], env["SSH_ASKPASS_REQUIRE"] != nil {
+            let prompt = a.dropFirst().joined(separator: " ").lowercased()
+            print(prompt.contains("yes/no") || prompt.contains("fingerprint") ? "no" : pw)
+            exit(0)
+        }
+        // --sony-selftest <report.txt>: the Sony dataset parser and labels checked against the demo camera, no window
+        if let i = a.firstIndex(of: "--sony-selftest"), i + 1 < a.count {
+            let (ok, line) = SonyDemo.roundTrip()
+            try? "\(NAME) v\(VERSION)\n\(line)\n".write(toFile: a[i + 1], atomically: true, encoding: .utf8)
+            print(line)
+            exit(ok ? 0 : 1)
+        }
         // --quiet: a test start, on the MacBook Pro screen, without taking Marko's focus
         // --selftest <report.txt>: every camera in turn, frames counted and checked for movement, then quit
         if let i = a.firstIndex(of: "--selftest"), i + 1 < a.count { delegate.selftest = a[i + 1] }

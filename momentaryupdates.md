@@ -113,3 +113,11 @@ minutes, you remove minutes. We save on space. It's very simple."
 cluster it shows `— Mb/s`; after Stop it runs ffprobe on the final MKV, so the displayed bitrate exactly matches the disk
 file's `format.bit_rate`. Remaining time omits zero-hour and zero-minute parts. The underlying width/height calculation
 was also corrected to follow 720p and 1440p sources exactly instead of forcing a minimum 1920×1080 record size.
+
+## 21.11.2026: SONY key, every camera control over the picture (v21)
+Marko: "Now when you grabbing every possible control, please map it to my screen. I need to have button Sony control, and
+all its icons and pop up menus you overlay over my image, live image in my web recorder, and I can change all the settings
+inside my own window, not digging through the sub menus."
+He chose our own PTP control (no Imaging Edge Remote window, no stolen mouse, instant changes) and wants PICTURE PROFILE
+switchable between PP1 ("shooting") and the S-Log3 / S-Gamut3.Cine profile, its slot read from the camera, never guessed.
+**Status (21.11.2026): built as v21** (see TAKEOVER). Not yet run against the camera: it was not on the Mantra network.
