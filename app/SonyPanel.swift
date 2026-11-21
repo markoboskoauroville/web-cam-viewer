@@ -328,9 +328,17 @@ final class SonyPanel: NSView {
         needsLayout = true
     }
 
+    /// the current one: a coloured border and title (v22: bezelColor alone was not redrawn in an inactive window)
     private func tint(_ b: NSButton, on: Bool, color: NSColor = .systemGreen) {
         b.bezelColor = on ? color : nil
-        b.contentTintColor = nil
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 7
+        b.layer?.borderWidth = on ? 2 : 0
+        b.layer?.borderColor = color.cgColor
+        let text: NSColor = !b.isEnabled ? .disabledControlTextColor : on ? color : .controlTextColor
+        b.attributedTitle = NSAttributedString(string: b.title, attributes: [
+            .foregroundColor: text, .font: b.font ?? NSFont.systemFont(ofSize: 12, weight: .semibold)])
+        b.setAccessibilityValue(on ? "current" : nil)
     }
 
     // MARK: layout: everything in rows that wrap with the width

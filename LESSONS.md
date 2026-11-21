@@ -56,3 +56,20 @@
 22. **Pipe writes cannot run on the capture queue (v13):** audio filled a FIFO and starved video capture before VideoToolbox
     could submit frames. OBS-style I/O belongs on a separate writer queue; the app validates output dimensions, frame count,
     duration, codec, pixel format, bitrate and decode from the disk file.
+23. **Picture Profile gamma and color mode belong to the selected slot (v21).** Sony's 0xD0E1 / 0xD0E9 describe "the Picture
+    Profile selected in Picture Profile" (0xD23F); there is no read-out of another slot. Which slot holds S-Log3 /
+    S-Gamut3.Cine is therefore learned only while that slot is selected (passively after one second, or READ SLOTS walking the
+    slots and putting the old one back). A slot number is never assumed from factory defaults.
+24. **A property can be offered and still be refused (v21).** GetSet = 1 means the Mac may set it in principle; IsEnabled 0
+    (greyed) or 2 (display only) means not now; exposure program needs Position Key Setting 0xD25A = PC Remote priority (Sony's
+    own example sets it first). SDIO_SetExtDevicePropValue answers OK even when the camera keeps its value, so every set is
+    read back (up to 1.5 s) and the overlay shows what the camera reports, not what was asked.
+25. **SSDP must ask on every interface (v21).** With the default route on the Tailscale exit node or the Nothing hotspot, a
+    multicast M-SEARCH leaves on the wrong interface and the camera on the Mantra router's 192.168.1.x never hears it.
+    IP_MULTICAST_IF per IPv4 interface (utun excluded), plus the saved address, finds it on whatever LAN route exists.
+26. **A demo camera behind the same PTP calls (v21).** SonyDemo answers OpenSession, SDIO_Connect, 0x9209, 0x9205 and 0x9207 in
+    the real dataset format, so the parser, the set/read-back loop and the overlay are exercised without the body;
+    `--sony-selftest` checks the write/parse round trip and the labels (F4, 1/50, 2.5", ISO AUTO, −0.7 EV, S-Log3).
+27. **bezelColor is not a state marker (v22).** A rounded NSButton's bezelColor set after the window was shown did not redraw
+    while the window was inactive (the demo test window never takes focus), so the current Picture Profile looked unmarked.
+    A layer border plus a coloured attributed title shows the state in every window state.

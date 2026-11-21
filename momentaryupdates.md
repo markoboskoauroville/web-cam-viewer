@@ -120,4 +120,4 @@ all its icons and pop up menus you overlay over my image, live image in my web r
 inside my own window, not digging through the sub menus."
 He chose our own PTP control (no Imaging Edge Remote window, no stolen mouse, instant changes) and wants PICTURE PROFILE
 switchable between PP1 ("shooting") and the S-Log3 / S-Gamut3.Cine profile, its slot read from the camera, never guessed.
-**Status (21.11.2026): built as v21** (see TAKEOVER). Not yet run against the camera: it was not on the Mantra network.
+**Status (21.11.2026): built as v21, marker fix v22** (see TAKEOVER). Not yet run against the camera: it was not on the Mantra network.
