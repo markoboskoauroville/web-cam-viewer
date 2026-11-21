@@ -121,3 +121,14 @@ inside my own window, not digging through the sub menus."
 He chose our own PTP control (no Imaging Edge Remote window, no stolen mouse, instant changes) and wants PICTURE PROFILE
 switchable between PP1 ("shooting") and the S-Log3 / S-Gamut3.Cine profile, its slot read from the camera, never guessed.
 **Status (21.11.2026): built as v21, marker fix v22** (see TAKEOVER). Not yet run against the camera: it was not on the Mantra network.
+
+## 21.11.2026: sound, Sony on Wi-Fi, remote control (v23)
+Marko: "Continue developing our webcam recording app. It doesn't record the sound first. Bug 2: look at display. Capture the screen from the app. I open the menu in my Sony. It's on Wi-Fi, and the application says it's not on Wi-Fi. Please make it connect to the camera and remotely control it. Fix the bugs. Fable is writing the plan. Workers in the lower model are doing the work, and Fable is giving the score of the app. Until we get 10/10, the job is not finished. While Fable is correcting, you need to always write the skills and lessons learned. Next time the Claude will give 10 out of 10 immediately."
+
+**Plan (Fable, 21.11.2026), in short.** A: reproduce the sound fault through the API in his real configurations, probe
+every take (stream, first pts, level, packets), fix the real cause, and never record silently (a warning within 2 s when
+no audio samples arrive). B: replace the one "not found" with a staged diagnosis (Mac LAN address, camera ping/ARP with IP
+and MAC, SSDP, port 15740/22, camera on USB and who holds it) and name the exact α7 V menu line that opens remote control;
+the same diagnosis on GET /sony/status. C: connect and control the real body: Wi-Fi PTP-IP first, USB PTP (ImageCaptureCore)
+second behind the same SonyLink calls; never steal the USB session from Imaging Edge Remote silently (a TAKE CONTROL key).
+Built as v23 by GitHub only; lessons, takeover, a webcam-recorder skill, the manifest and Queen's skill written back.
