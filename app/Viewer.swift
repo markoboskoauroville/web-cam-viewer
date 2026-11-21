@@ -254,7 +254,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.target = self; recKey.action = #selector(toggleRecord)
         recKey.setAccessibilityIdentifier("rec")
         recKey.setAccessibilityLabel("Record")
-        recKey.toolTip = "Record: ~/Movies/mb_<date>_<time>.mkv, H.264 at the live feed resolution and frame rate"
+        recKey.toolTip = "Record: mb_<date>_<time>.mkv in the recordings folder, H.264 at the live feed resolution and frame rate"
         recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
@@ -286,7 +286,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         folderKey.contentTintColor = .secondaryLabelColor
         folderKey.target = self; folderKey.action = #selector(openFolder)
         folderKey.setAccessibilityIdentifier("folder")
-        folderKey.toolTip = "Open the folder with your recordings (~/Movies)"
+        folderKey.toolTip = "Open the folder with your recordings. Right-click or Option-click: choose another folder (remembered)"
+        let fm = NSMenu()
+        fm.addItem(withTitle: "Open recordings folder", action: #selector(openFolderMenu), keyEquivalent: "").target = self
+        fm.addItem(withTitle: "Choose folder…", action: #selector(chooseFolder), keyEquivalent: "").target = self
+        folderKey.menu = fm
 
         let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
@@ -466,6 +470,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if CommandLine.arguments.contains("--hover-rec") { recKey.hovering = true }   // the hover drawn without his mouse
         else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
         layoutPreview()
+        snapper.restore()
     }
 
     @objc private func snapTapped() { snapper.toggle() }
@@ -480,9 +485,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         snapKey.setAccessibilityLabel(on ? "Unsnap the Sony remote" : "Snap the Sony remote")
     }
 
+    @objc private func openFolderMenu() { revealFolder() }
+    @objc private func chooseFolder() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
+        p.prompt = "Record here"; p.directoryURL = Recorder.folder
+        if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "recordFolder"); updateQualityKey() }
+    }
     @objc private func openFolder() {
-        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
-        if let take = lastTake, FileManager.default.fileExists(atPath: take) {
+        if NSEvent.modifierFlags.contains(.option) { chooseFolder() } else { revealFolder() }
+    }
+    private func revealFolder() {
+        let movies = Recorder.folder
+        if let take = lastTake, URL(fileURLWithPath: take).deletingLastPathComponent().path == movies.path, FileManager.default.fileExists(atPath: take) {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: take)])   // the newest take, selected
         } else { NSWorkspace.shared.open(movies) }
     }
@@ -1144,7 +1159,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private static func recordingSecondsRemaining(at videoBitrate: Int) -> Int64 {
-        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        let movies = Recorder.folder
         let values = try? movies.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         let available = values?.volumeAvailableCapacityForImportantUsage ?? 0
         // Stereo AAC is 256 kb/s.

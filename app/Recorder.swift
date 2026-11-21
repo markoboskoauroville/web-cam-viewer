@@ -68,9 +68,18 @@ final class Recorder {
         return Int(Double(bytes.int64Value * 8) / elapsed)
     }
 
+    /// v18: the folder of the takes is remembered (F key, right-click → Choose folder…); default ~/Movies
+    static var folder: URL {
+        if let p = UserDefaults.standard.string(forKey: "recordFolder") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue { return URL(fileURLWithPath: p) }
+        }
+        return FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+    }
+
     static func newURL(title: String? = nil) -> URL {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let dir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        let dir = folder
         var t = (title ?? "").unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" ? String($0) : "_" }.joined()
         t = String(t.prefix(60)).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         return dir.appendingPathComponent("mb_\(f.string(from: Date()))\(t.isEmpty ? "" : "_" + t).mkv")

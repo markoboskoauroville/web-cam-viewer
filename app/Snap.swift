@@ -39,6 +39,12 @@ final class SnapRemote {
 
     func toggle() { isSnapped ? unsnap() : snap() }
 
+    /// the state is remembered: snapped at quit and the remote still open = snapped again at start (never opens the remote by itself)
+    func restore() {
+        guard UserDefaults.standard.bool(forKey: "snapped"), !isSnapped, AXIsProcessTrusted(), let w = findWindow() else { return }
+        attach(w)
+    }
+
     func snap() {
         guard !isSnapped, !opening else { return }
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -73,6 +79,7 @@ final class SnapRemote {
     func unsnap() {
         detach(); remoteApp = nil
         isSnapped = false
+        UserDefaults.standard.set(false, forKey: "snapped")
         changed()
     }
 
@@ -133,9 +140,9 @@ final class SnapRemote {
         }
         remoteOnRight = r.midX >= window.frame.midX      // it stays on the side it was on
         isSnapped = true
+        UserDefaults.standard.set(true, forKey: "snapped")
         changed()
         placeRemote()                                    // our window leads the first time
-        checkCamera()
     }
 
     // MARK: one piece
@@ -213,23 +220,11 @@ final class SnapRemote {
         if window.styleMask.contains(.fullScreen) { return }
         remoteOnRight = r.midX >= window.frame.midX
         placeOurs()
-        checkCamera()
     }
 
     @objc private func appTerminated(_ n: Notification) {
         guard isSnapped, let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.bundleIdentifier == Self.bundleID else { return }
         unsnap()
-    }
-
-    // MARK: the camera
-
-    /// The remote's text cannot be read (no Accessibility children), so its state is told by its shape: the short window
-    /// is the camera list ("Double-click a device name to connect to it."), the tall one is the control panel.
-    private func checkCamera() {
-        guard let r = remoteRect() else { return }
-        if r.height < 500 {
-            say("Sony Remote is waiting for the camera.\nDouble-click the camera in its list. If the list is empty, press ENABLE on the camera's screen\n(allow the connection from this computer), then press Refresh.")
-        } else { say("") }
     }
 }
