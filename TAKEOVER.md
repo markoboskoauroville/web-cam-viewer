@@ -9,6 +9,18 @@ Final disk verification: on the live 1920×1080 20 FPS UGREEN feed, LOW/MID/HIGH
 their five-second files were Matroska + H.264 High/yuv420p + AAC, exactly 1920×1080 and 20.0 FPS, with all frames decoded.
 The static-scene CBR files measured about 5.84/14.83/29.87 Mb/s at the video-plus-overhead probe (about 10% below target).
 
+**State 21.11.2026: v15 = SNAP REMOTE.** Marko: "this app recognize this remote window and there should be some kind of a snap remote
+action button ... they are together as one piece and if I resize any of them both are resizing ... if the remote is not open,
+the application opens it ... if it cannot find camera, give instructions to press enable on the screen of Sony camera."
+`app/Snap.swift` (SnapRemote): the button SNAP REMOTE in the top bar finds the main window of Sony Imaging Edge Remote
+(`com.sony.Remote`, /Applications/Imaging Edge/Remote.app) through the Accessibility API, opens the app first if it is not
+running, and places it against this window (same side as it was, same height, top edges level). An AXObserver on the remote
+window (moved / resized / destroyed) and NSWindow notifications on ours keep the pair together: moving or resizing either
+moves or resizes the other; echoes of frames we set ourselves are recognised and ignored. If the remote refuses a height,
+our window takes the height it kept. Click again (SNAPPED ✓) to unsnap; quitting the remote unsnaps. Needs Accessibility
+permission (prompted; message says where). If no Sony camera is in the camera list, the picture area says to press ENABLE
+on the camera's screen. API: `POST /snap {"on": true|false}`, `/status` has `snapped`. Compiled by GitHub only; not yet seen by Marko.
+
 **State 21.11.2026: v14 = actual file bitrate and compact disk time.** The LOW / MID / HIGH key now shows the real MKV
 bitrate measured from disk (the finalized value is read by ffprobe and matches the file's `format.bit_rate`) and formats
 free-space duration as `h m s`, omitting any zero hour or minute units. A capture frame below 64 KB is shown as `— Mb/s`

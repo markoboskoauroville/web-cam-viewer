@@ -36,6 +36,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
     private let qualityKey = NSButton()
+    private let snapKey = NSButton()
+    private var snapper: SnapRemote!
     private let closeButton = NSButton()
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
@@ -265,7 +267,17 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         qualityKey.setContentHuggingPriority(.required, for: .horizontal)
         updateQualityKey()
 
-        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
+        // v15: SNAP REMOTE joins this window and Sony's Imaging Edge Remote into one piece (opens the remote if it is closed)
+        snapKey.translatesAutoresizingMaskIntoConstraints = false
+        snapKey.isBordered = false
+        snapKey.target = self
+        snapKey.action = #selector(snapTapped)
+        snapKey.setAccessibilityIdentifier("snap")
+        snapKey.setContentHuggingPriority(.required, for: .horizontal)
+        snapper = SnapRemote(window: window, say: { [weak self] in self?.say($0) }, changed: { [weak self] in self?.updateSnapKey() })
+        updateSnapKey()
+
+        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, snapKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -435,6 +447,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if CommandLine.arguments.contains("--hover-rec") { recKey.hovering = true }   // the hover drawn without his mouse
         else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
         layoutPreview()
+    }
+
+    @objc private func snapTapped() { snapper.toggle() }
+
+    private func updateSnapKey() {
+        let on = snapper.isSnapped
+        snapKey.attributedTitle = NSAttributedString(string: on ? "SNAPPED ✓" : "SNAP REMOTE", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: on ? NSColor.systemGreen : NSColor.white])
+        snapKey.toolTip = on ? "Snapped to Sony Imaging Edge Remote: they move and resize as one. Click to unsnap."
+            : "Snap Sony Imaging Edge Remote beside this window (opens it if closed); they then move and resize as one"
+        snapKey.setAccessibilityLabel(on ? "Unsnap the Sony remote" : "Snap the Sony remote")
     }
 
     @objc private func closeTapped() { NSApp.terminate(nil) }
@@ -1390,7 +1414,7 @@ extension Viewer {
         return ["camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
-                "quality": recordQuality.rawValue,
+                "quality": recordQuality.rawValue, "snapped": snapper.isSnapped,
                 "bitrate": recordQuality.bitrate(width: feedWidth, height: feedHeight, fps: recordingFPS),
                 "actualBitrate": nn(currentActualBitrate()),
                 "recordFPS": Int(recordingFPS),
@@ -1452,5 +1476,6 @@ extension Viewer {
         } else if isFull { window.toggleFullScreen(nil) }
         return true
     }
+    func apiSnap(_ on: Bool) -> Bool { if on != snapper.isSnapped { snapper.toggle() }; return snapper.isSnapped }
     func apiFront() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 }
