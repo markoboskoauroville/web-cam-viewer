@@ -132,3 +132,9 @@ and MAC, SSDP, port 15740/22, camera on USB and who holds it) and name the exact
 the same diagnosis on GET /sony/status. C: connect and control the real body: Wi-Fi PTP-IP first, USB PTP (ImageCaptureCore)
 second behind the same SonyLink calls; never steal the USB session from Imaging Edge Remote silently (a TAKE CONTROL key).
 Built as v23 by GitHub only; lessons, takeover, a webcam-recorder skill, the manifest and Queen's skill written back.
+
+Marko: "This is the recording. There is a bit of sound at the beginning, maybe one third of the second, and then it's gone. /Volumes/EXT_1TB/WEBRECORDING/mb_2026-11-21_13-50-08.mkv"
+**Measured by the master (21.11.2026, read only):** the sound of that take is not interleaved. A handful of audio packets
+sit at the start of the file; the audio from 0.09 s to about 227 s sits in one block at byte 1.42 GB, written at Stop, behind
+227 s of video. ffmpeg decodes it, but players that read in file order (IINA, DaVinci Resolve) run out of sound after a
+fraction of a second, and a hard kill would have lost the sound completely. Audio track default flag was 0.
