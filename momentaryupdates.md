@@ -104,3 +104,12 @@ fully decodable. Measured video plus overhead was about 5.84 / 14.83 / 29.87 Mb/
 and container difference on this static scene). The OBS ffmpeg-mux helper architecture is used with an ISC attribution
 to local OBS commit 48b876374: the final MKV exists from the start, one-second clusters are flushed, and VideoToolbox H.264
 packets are copied without a remux. A hard kill of the app left a 1080p20 H.264/AAC MKV that decoded with exit 0.
+
+## 21.11.2026: actual file bitrate and compact remaining time
+Marko: "Is an upgraded display next to the mid high and etc. You need to add the actual bit rate of the file. Also, you
+need to divide minutes into hours, minutes, and seconds. If there are zero hours, you remove hours. If there are zero
+minutes, you remove minutes. We save on space. It's very simple."
+**Status (21.11.2026): built as v14.** The key shows `MID <actual Mb/s> (<compact h m s>)`. During a buffered first
+cluster it shows `— Mb/s`; after Stop it runs ffprobe on the final MKV, so the displayed bitrate exactly matches the disk
+file's `format.bit_rate`. Remaining time omits zero-hour and zero-minute parts. The underlying width/height calculation
+was also corrected to follow 720p and 1440p sources exactly instead of forcing a minimum 1920×1080 record size.

@@ -60,6 +60,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var recStart: Date?
     private var lastTake: String?
     private var currentTake: String?
+    private var lastActualBitrate: Int? = UserDefaults.standard.object(forKey: "lastActualBitrate").flatMap { ($0 as? NSNumber)?.intValue }
+    private var lastActualQuality: RecordQuality? = UserDefaults.standard.string(forKey: "lastActualQuality")
+        .flatMap(RecordQuality.init(rawValue:))
     private var lastLevels: [Float] = []
     private let sliceLayer = AVSampleBufferDisplayLayer()
     private var sliceOn = false                        // capture queue
@@ -1038,6 +1041,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc func toggleRecord() { isRecording ? stopRecording() : startRecording() }
 
     @objc private func toggleQuality() {
+        guard !isRecording else { return }
         let all = RecordQuality.allCases
         guard let index = all.firstIndex(of: recordQuality) else { return }
         recordQuality = all[(index + 1) % all.count]
@@ -1046,34 +1050,63 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private func updateQualityKey() {
-        let width = sliceOn ? Slicer.outW : max(feedWidth, 1920)
-        let height = sliceOn ? Slicer.outH : max(feedHeight, 1080)
+        let width = sliceOn ? Slicer.outW : (feedWidth > 0 ? feedWidth : 1920)
+        let height = sliceOn ? Slicer.outH : (feedHeight > 0 ? feedHeight : 1080)
         let bitrate = recordQuality.bitrate(width: width, height: height, fps: recordingFPS)
-        let minutes = Self.recordingMinutesRemaining(at: bitrate)
-        let remaining = "\(minutes) min"
-        qualityKey.attributedTitle = NSAttributedString(string: "\(recordQuality.title) (\(remaining))", attributes: [
+        let remaining = Self.compactDuration(Self.recordingSecondsRemaining(at: bitrate))
+        let actual = currentActualBitrate()
+        let actualText = actual.map { String(format: "%.2f Mb/s", Double($0) / 1_000_000) } ?? "— Mb/s"
+        qualityKey.attributedTitle = NSAttributedString(
+            string: "\(recordQuality.title) \(actualText) (\(remaining))", attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
             .foregroundColor: NSColor.white,
         ])
-        qualityKey.toolTip = "\(recordQuality.title): \(String(format: "%.1f", Double(bitrate) / 1_000_000)) Mb/s at \(recordingFPS) live FPS · H.264 MKV · \(remaining) available"
-        qualityKey.setAccessibilityLabel("\(recordQuality.title) recording quality, \(remaining) available")
+        qualityKey.toolTip = "\(recordQuality.title): target \(String(format: "%.1f", Double(bitrate) / 1_000_000)) Mb/s, actual \(actualText), \(recordingFPS) live FPS · H.264 MKV · \(remaining) available"
+        qualityKey.setAccessibilityLabel("\(recordQuality.title), actual \(actualText), \(remaining) available")
         recKey.toolTip = "Record: \(qualityKey.title), \(String(format: "%.1f", Double(bitrate) / 1_000_000)) Mb/s H.264 MKV"
     }
 
-    private static func recordingMinutesRemaining(at videoBitrate: Int) -> Int {
+    private func currentActualBitrate() -> Int? {
+        if isRecording, let started = recStart, let path = currentTake {
+            return Self.fileBitrate(path, elapsed: Date().timeIntervalSince(started))
+        }
+        return lastActualQuality == recordQuality ? lastActualBitrate : nil
+    }
+
+    private static func fileBitrate(_ path: String, elapsed: TimeInterval) -> Int? {
+        guard elapsed > 0,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let bytes = attributes[.size] as? NSNumber else { return nil }
+        guard bytes.int64Value >= 65_536 else { return nil }
+        return Int(Double(bytes.int64Value * 8) / elapsed)
+    }
+
+    static func compactDuration(_ seconds: Int64) -> String {
+        let total = max(0, seconds)
+        let hours = total / 3600
+        let minutes = total % 3600 / 60
+        let secs = total % 60
+        var parts: [String] = []
+        if hours > 0 { parts.append("\(hours)h") }
+        if minutes > 0 { parts.append("\(minutes)m") }
+        if secs > 0 || parts.isEmpty { parts.append("\(secs)s") }
+        return parts.joined(separator: " ")
+    }
+
+    private static func recordingSecondsRemaining(at videoBitrate: Int) -> Int64 {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
         let values = try? movies.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         let available = values?.volumeAvailableCapacityForImportantUsage ?? 0
         // Stereo AAC is 256 kb/s.
-        let bytesPerMinute = Double(videoBitrate + 256_000) / 8 * 60
-        return max(0, Int(Double(available) / bytesPerMinute))
+        let bytesPerSecond = Double(videoBitrate + 256_000) / 8
+        return max(0, Int64(Double(available) / bytesPerSecond))
     }
 
     func startRecording(title: String? = nil, _ started: ((URL?) -> Void)? = nil) {
         guard current != nil, cameraAllowed else { say("No camera to record."); started?(nil); return }
         let fps = recordingFPS
-        let width = self.sliceOn ? Slicer.outW : max(self.capturedWidth, 1920)
-        let height = self.sliceOn ? Slicer.outH : max(self.capturedHeight, 1080)
+        let width = self.sliceOn ? Slicer.outW : (self.capturedWidth > 0 ? self.capturedWidth : 1920)
+        let height = self.sliceOn ? Slicer.outH : (self.capturedHeight > 0 ? self.capturedHeight : 1080)
         let quality = self.recordQuality
         captureQueue.async {
             do {
@@ -1091,6 +1124,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func recordingStarted(fps: Int32) {
         recKey.recording = true
         recKey.toolTip = "Stop recording"
+        qualityKey.isEnabled = false
         timecode.isHidden = false
         showTimecode(fps)
         tcTimer = Timer.scheduledTimer(withTimeInterval: 1 / Double(fps) / 2, repeats: true) { _ in self.showTimecode(fps) }
@@ -1111,13 +1145,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         tcTimer?.invalidate(); tcTimer = nil
         recKey.recording = false
         recKey.toolTip = "Record"
+        qualityKey.isEnabled = true
         timecode.isHidden = true
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
             self.lastTake = r.url.path; self.currentTake = nil
+            self.lastActualQuality = r.quality
+            self.lastActualBitrate = r.actualBitrate
+            UserDefaults.standard.set(r.actualBitrate, forKey: "lastActualBitrate")
+            UserDefaults.standard.set(r.quality.rawValue, forKey: "lastActualQuality")
             if let f = r.failed { self.say("The take failed:\n\(f)") }
+            self.updateQualityKey()
             done?(r)
         } }
     }
@@ -1352,9 +1392,14 @@ extension Viewer {
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
                 "quality": recordQuality.rawValue,
                 "bitrate": recordQuality.bitrate(width: feedWidth, height: feedHeight, fps: recordingFPS),
+                "actualBitrate": nn(currentActualBitrate()),
                 "recordFPS": Int(recordingFPS),
-                "remainingMinutes": Self.recordingMinutesRemaining(
-                    at: recordQuality.bitrate(width: max(feedWidth, 1920), height: max(feedHeight, 1080), fps: recordingFPS)),
+                "remainingSeconds": Self.recordingSecondsRemaining(
+                    at: recordQuality.bitrate(width: feedWidth > 0 ? feedWidth : 1920,
+                                              height: feedHeight > 0 ? feedHeight : 1080, fps: recordingFPS)),
+                "remainingTime": Self.compactDuration(Self.recordingSecondsRemaining(
+                    at: recordQuality.bitrate(width: feedWidth > 0 ? feedWidth : 1920,
+                                              height: feedHeight > 0 ? feedHeight : 1080, fps: recordingFPS))),
                 "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "\(feedWidth)x\(feedHeight)",
                 "feed": ["width": feedWidth, "height": feedHeight, "format": feedPixelFormat,
                          "active": !feedStats.isHidden, "currentFPS": measuredFPS, "droppedFrames": measuredDrops],

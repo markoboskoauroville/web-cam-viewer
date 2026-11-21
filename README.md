@@ -18,8 +18,9 @@ Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card
 - **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mkv`: H.264 at the live camera resolution and delivered frame rate, AAC
   48 kHz, with the real-time start time code in the file metadata; `REC  HH:MM:SS:FF` is shown while it records.
   LOW / MID / HIGH scale from 10 / 25 / 50 Mb/s at 1920×1080 30 FPS, by pixels × delivered FPS. The quality key is next
-  to Record and shows the estimated free-space recording time in minutes. The MKV is flushed through one-second clusters
-  from the first frame so an unplanned app/computer stop leaves a readable file.
+  to Record and shows the actual bitrate from the MKV on disk plus estimated free-space recording time. Space is shown
+  compactly as hours, minutes and seconds; zero units are omitted. The MKV is flushed through one-second clusters from the
+  first frame so an unplanned app/computer stop leaves a readable file.
 - **⌘F** or the corners key: full screen: the picture, the two meters (whole height) and the REC time code; only the bar
   goes. **Escape** goes back.
 - **No Sony tether.** Webcam Recorder never opens an ImageCapture/PTP session and never holds an unselected Sony open.
@@ -43,7 +44,7 @@ Cloudflare Pages. Repository secrets: `CLOUDFLARE_API_TOKEN` (Marko pasted it), 
 ## Test flags
 
     WebCamViewer --list                 # the cameras, in the menu's order
-    curl http://127.0.0.1:8867/status    # includes feed.width/height/format/currentFPS/droppedFrames/active
+    curl http://127.0.0.1:8867/status    # includes feed, actualBitrate and remainingTime
     curl http://127.0.0.1:8867/capture   # verified formats, FPS and supported controls
     open -n -g "/Applications/Webcam Recorder (Mantra).app" --args --quiet
                                         # a test start on the MacBook Pro screen, without taking focus

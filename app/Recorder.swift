@@ -55,9 +55,18 @@ final class Recorder {
     private var wroteEncodedHeader = false
     private var finishing = false
     private var started = false
+    private(set) var actualBitrate: Int?
     private(set) var startClock: Date?
     private(set) var startTimecode = ""
     private(set) var failed: String?
+
+    func bitrateOnDisk(after elapsed: TimeInterval) -> Int? {
+        guard elapsed > 0,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let bytes = attributes[.size] as? NSNumber else { return nil }
+        guard bytes.int64Value >= 65_536 else { return nil }
+        return Int(Double(bytes.int64Value * 8) / elapsed)
+    }
 
     static func newURL(title: String? = nil) -> URL {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
@@ -339,10 +348,34 @@ final class Recorder {
                 } else if self.process.terminationStatus != 0, self.failed == nil {
                     self.failed = "ffmpeg stopped unexpectedly (\(self.process.terminationStatus))"
                 }
+                self.actualBitrate = self.probeBitrateOnDisk()
                 done(self)
             }
         }
         finishWhenMuxedOut()
+    }
+
+    private func probeBitrateOnDisk() -> Int? {
+        let paths = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
+        guard let path = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = [
+            "-v", "error",
+            "-show_entries", "format=bit_rate",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            url.path,
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Int(text)
+        } catch { return nil }
     }
 
     deinit {

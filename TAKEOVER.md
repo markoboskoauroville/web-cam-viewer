@@ -9,6 +9,12 @@ Final disk verification: on the live 1920×1080 20 FPS UGREEN feed, LOW/MID/HIGH
 their five-second files were Matroska + H.264 High/yuv420p + AAC, exactly 1920×1080 and 20.0 FPS, with all frames decoded.
 The static-scene CBR files measured about 5.84/14.83/29.87 Mb/s at the video-plus-overhead probe (about 10% below target).
 
+**State 21.11.2026: v14 = actual file bitrate and compact disk time.** The LOW / MID / HIGH key now shows the real MKV
+bitrate measured from disk (the finalized value is read by ffprobe and matches the file's `format.bit_rate`) and formats
+free-space duration as `h m s`, omitting any zero hour or minute units. A capture frame below 64 KB is shown as `— Mb/s`
+until enough output exists to report a meaningful rate. API fields: `actualBitrate`, `remainingSeconds`, `remainingTime`.
+Recording dimensions now also follow an active 720p/2K source instead of being forced up to 1920×1080.
+
 **State 20.11.2026: v12 = verified capture-device modes and white status.** Capture formats and exact frame rates are read
 from the selected device. The app keeps only rates explicitly exposed by AVFoundation (24/25 are absent for UGREEN 15389),
 uses the device's own exact duration timestamps, and verifies real UGREEN mode switches through active readback plus live
