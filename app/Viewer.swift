@@ -287,10 +287,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         folderKey.contentTintColor = .secondaryLabelColor
         folderKey.target = self; folderKey.action = #selector(openFolder)
         folderKey.setAccessibilityIdentifier("folder")
-        folderKey.toolTip = "Open the folder with your recordings. Right-click or Option-click: choose another folder (remembered)"
+        folderKey.toolTip = "Recordings folder: click to choose another folder (remembered) or show this one"
         let fm = NSMenu()
-        fm.addItem(withTitle: "Open recordings folder", action: #selector(openFolderMenu), keyEquivalent: "").target = self
         fm.addItem(withTitle: "Choose folder…", action: #selector(chooseFolder), keyEquivalent: "").target = self
+        fm.addItem(withTitle: "Show the folder in Finder", action: #selector(openFolderMenu), keyEquivalent: "").target = self
         folderKey.menu = fm
         updateFolderKey()
 
@@ -491,7 +491,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func updateFolderKey() {
         folderKey.attributedTitle = NSAttributedString(string: Recorder.folder.lastPathComponent + " ", attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
-        folderKey.toolTip = "Recordings go to \(Recorder.folder.path). Click: open it. Right-click or Option-click: choose another folder (remembered)"
+        folderKey.toolTip = "Recordings go to \(Recorder.folder.path). Click: choose another folder (remembered) or show this one"
     }
     @objc private func openFolderMenu() { revealFolder() }
     @objc private func chooseFolder() {
@@ -500,8 +500,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         p.prompt = "Record here"; p.directoryURL = Recorder.folder
         if p.runModal() == .OK, let u = p.url { UserDefaults.standard.set(u.path, forKey: "recordFolder"); updateQualityKey(); updateFolderKey() }
     }
+    /// v20 (Marko: "I need to pick the folder"): a click on F opens a small menu under it: Choose folder… first, then Open
     @objc private func openFolder() {
-        if NSEvent.modifierFlags.contains(.option) { chooseFolder() } else { revealFolder() }
+        guard let menu = folderKey.menu else { chooseFolder(); return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: folderKey.bounds.height + 2), in: folderKey)
     }
     private func revealFolder() {
         let movies = Recorder.folder
