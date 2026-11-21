@@ -9,6 +9,8 @@ Final disk verification: on the live 1920×1080 20 FPS UGREEN feed, LOW/MID/HIGH
 their five-second files were Matroska + H.264 High/yuv420p + AAC, exactly 1920×1080 and 20.0 FPS, with all frames decoded.
 The static-scene CBR files measured about 5.84/14.83/29.87 Mb/s at the video-plus-overhead probe (about 10% below target).
 
+**State 21.11.2026: v16 = SNAP follows the remote's windows.** Tested with Marko's Accessibility on: snap, moving and resizing either window moves/resizes the other, unsnap, and snap-opens-the-remote all work. Found: the opened remote first shows only its camera list (800x353, "Double-click a device name to connect to it") and replaces it with the tall control panel after connecting, and its text is not readable through Accessibility. v16 prefers the tallest window, follows the replacement (stays snapped), and judges the camera state by window shape: short = list, so the ENABLE / double-click / Refresh instructions show; tall = panel, message cleared. The v15 check against macOS's camera list was wrong (the Sony in USB remote mode is not a video device) and is gone.
+
 **State 21.11.2026: v15 = SNAP REMOTE.** Marko: "this app recognize this remote window and there should be some kind of a snap remote
 action button ... they are together as one piece and if I resize any of them both are resizing ... if the remote is not open,
 the application opens it ... if it cannot find camera, give instructions to press enable on the screen of Sony camera."

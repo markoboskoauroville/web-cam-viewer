@@ -71,9 +71,7 @@ final class SnapRemote {
     }
 
     func unsnap() {
-        if let o = observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
-        observer = nil; remoteWindow = nil; remoteApp = nil
-        expectedOurs = nil; expectedRemote = nil
+        detach(); remoteApp = nil
         isSnapped = false
         changed()
     }
@@ -93,16 +91,37 @@ final class SnapRemote {
             return (sub as? String) == (kAXStandardWindowSubrole as String) && axFrame(w) != nil
         }
         remoteApp = app
-        return std.first
+        return std.max { (axFrame($0)?.height ?? 0) < (axFrame($1)?.height ?? 0) }
+    }
+
+    private func detach() {
+        if let o = observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
+        observer = nil; remoteWindow = nil
+        expectedOurs = nil; expectedRemote = nil
+    }
+
+    /// The remote swaps its camera list for the control panel (or back): stay snapped and follow to the new window.
+    private func remoteWindowGone() {
+        guard isSnapped else { return }
+        detach()
+        followNewWindow(tries: 120)
+    }
+    private func followNewWindow(tries: Int) {
+        guard isSnapped else { return }
+        if let w = findWindow() { attach(w); return }
+        if tries <= 0 || remoteApp?.isTerminated == true { unsnap(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.followNewWindow(tries: tries - 1) }
     }
 
     private func attach(_ w: AXUIElement) {
+        detach()
         remoteWindow = w
         guard let app = remoteApp, let r = remoteRect() else { say("The remote's window cannot be read."); return }
         var obs: AXObserver?
-        let cb: AXObserverCallback = { _, _, _, refcon in
+        let cb: AXObserverCallback = { _, _, note, refcon in
             guard let refcon else { return }
-            Unmanaged<SnapRemote>.fromOpaque(refcon).takeUnretainedValue().remoteChanged()
+            let me = Unmanaged<SnapRemote>.fromOpaque(refcon).takeUnretainedValue()
+            if (note as String) == (kAXUIElementDestroyedNotification as String) { me.remoteWindowGone() } else { me.remoteChanged() }
         }
         if AXObserverCreate(app.processIdentifier, cb, &obs) == .success, let obs {
             let me = Unmanaged.passUnretained(self).toOpaque()
@@ -115,7 +134,6 @@ final class SnapRemote {
         remoteOnRight = r.midX >= window.frame.midX      // it stays on the side it was on
         isSnapped = true
         changed()
-        say("")
         placeRemote()                                    // our window leads the first time
         checkCamera()
     }
@@ -195,6 +213,7 @@ final class SnapRemote {
         if window.styleMask.contains(.fullScreen) { return }
         remoteOnRight = r.midX >= window.frame.midX
         placeOurs()
+        checkCamera()
     }
 
     @objc private func appTerminated(_ n: Notification) {
@@ -205,12 +224,12 @@ final class SnapRemote {
 
     // MARK: the camera
 
-    /// Sony's remote only works when the camera is on the network or the cable and has allowed the connection.
+    /// The remote's text cannot be read (no Accessibility children), so its state is told by its shape: the short window
+    /// is the camera list ("Double-click a device name to connect to it."), the tall one is the control panel.
     private func checkCamera() {
-        guard !Cameras.all().contains(where: Cameras.isSony) else { return }
-        say("Sony camera not found.\nOn the camera's screen press ENABLE (allow the connection from this computer),\nthen wait a few seconds. If there is no ENABLE, check the cable or Wi-Fi.")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
-            if self?.isSnapped == true, Cameras.all().contains(where: Cameras.isSony) { self?.say("") }
-        }
+        guard let r = remoteRect() else { return }
+        if r.height < 500 {
+            say("Sony Remote is waiting for the camera.\nDouble-click the camera in its list. If the list is empty, press ENABLE on the camera's screen\n(allow the connection from this computer), then press Refresh.")
+        } else { say("") }
     }
 }
