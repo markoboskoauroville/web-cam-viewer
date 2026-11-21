@@ -1339,6 +1339,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         tcTimer = Timer.scheduledTimer(withTimeInterval: 1 / Double(fps) / 2, repeats: true) { _ in self.showTimecode(fps) }
     }
 
+    /// v27: the banner never covers the Sony overlay: while it shows, the overlay starts under it (v26 covered CONNECT's row)
+    private func setSoundBanner(visible: Bool) {
+        soundBanner.isHidden = !visible
+        soundBanner.preferredMaxLayoutWidth = max(100, (window.contentView?.bounds.width ?? 420) - 32)   // its wrapped height
+        let top = Self.barHeight + (visible ? ceil(soundBanner.fittingSize.height) + 12 : 0)
+        if sonyTop.constant != top { sonyTop.constant = top }
+    }
+
     /// v23 (silent-failure.md): what is wrong with the take's sound now, nil while the sound is arriving
     var soundWarningNow: String? {
         guard liveRecorder != nil else { return nil }
@@ -1361,8 +1369,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         timecode.attributedStringValue = s
         let w = soundWarningNow
-        soundBanner.isHidden = w == nil
         if let w, soundBanner.stringValue != "⚠ " + w { soundBanner.stringValue = "⚠ " + w; soundBanner.setAccessibilityValue(w) }
+        setSoundBanner(visible: w != nil)
         if soundWarningNow != nil, !feedStats.isHidden, ProcessInfo.processInfo.systemUptime - lastWarnDraw > 0.5 {
             lastWarnDraw = ProcessInfo.processInfo.systemUptime; updateFeedStats()
         }
@@ -1376,7 +1384,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         timecode.isHidden = true
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
-        liveRecorder = nil; liveWithoutSound = false; soundBanner.isHidden = true
+        liveRecorder = nil; liveWithoutSound = false; setSoundBanner(visible: false)
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
             self.lastTake = r.url.path; self.currentTake = nil

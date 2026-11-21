@@ -1,5 +1,35 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 21.11.2026: v23 → v26 = the sound is really in the take; the Sony diagnosis is honest; USB control road; updater.**
+Marko: "It doesn't record the sound first ... It's on Wi-Fi, and the application says it's not on Wi-Fi. Please make it connect
+to the camera and remotely control it." (word for word in momentaryupdates.md). Skill: ~/.claude/skills/webcam-recorder.
+- **Sound (v23).** v13 to v22 wrote all of a take's sound in one block at Stop (a raw H.264 pipe has no time stamps and ffmpeg 9
+  starved the audio FIFO; LESSONS 28), dropped the first 1.0 to 1.7 s (30), and had no default flags. Players that read in order
+  (IINA, Resolve) lost the sound after 0.3 s. Now: FLV video tags with capture time stamps on the pipe, the FIFO opened on the
+  writer queue, audio aligned to the first frame, default flags, SIGPIPE ignored. Verified on the installed app with
+  tools/check_take.py: first take after launch 2560x1440 HIGH, LOW, 60 s and 240 s slice HIGH, UGREEN HDMI audio (2 ch), a take
+  started right after switching the input, and a kill -9 at 30 s: every one max lag 0.0 s, audio end within 0.05 s of the
+  video end, packets = expected (240 s: 11260 / 11258), decodes clean.
+- **Warnings (v23/v24/v26).** No sound buffers for 2 s, a format change, a write error, an input with no buffers at start, or
+  only digital zeros for 3 s = red banner under the bar (its own wrapping line) and `/status soundWarning`.
+- **Capture mode (v24/v25).** The remembered capture format (2560x1440 30) came back as 1920x1080 at every launch and after every
+  sound-input change (session preset re-applied on each commit; LESSONS 36). Restored after each commit; checked on v25 by
+  launch and by re-selecting the sound input.
+- **Sony (v23/v24).** SONY / CONNECT and `GET /sony/status?check=1` measure five stages (Mac LAN, camera ping + MAC, SSDP,
+  15740/22, USB + owner) and say only what was measured. Order: Wi-Fi PTP-IP if its port is open, else USB PTP through
+  ImageCaptureCore (SonyUSB.swift) if the cable is free, else the stages; TAKE CONTROL (Marko's press) closes Imaging Edge Remote
+  and connects over USB. API: /sony/status, check, connect, disconnect, takecontrol, rec {on}, prop?code=, set {code|name,
+  value|label} (answer = camera read-back), /sounds, /sound.
+  On the body 21.11.2026: camera 192.168.1.100 MAC 80:99:9B:13:AD:3F answers ping; 15740/22/64321/80/443 closed; no SSDP;
+  USB ILCE-7M5 held by "pid 4939, Remote". **Not verified:** the USB road and every control against the body (connect, ISO,
+  shutter, REC, READ SLOTS): it needs Imaging Edge Remote closed (TAKE CONTROL), which is Marko's decision. The Wi-Fi road
+  needs MENU → Network → Cnct./Remote Sht. → Remote Shoot Function → Remote Shooting: On with the cable out or Remote closed
+  (whether the body opens 15740 then is not yet seen).
+- **Updater (v23).** Updater.swift (kits/mac-updater), checkAtStart at launch, repo web-cam-viewer.
+- **Old take repair (not run):** `ffmpeg -i in.mkv -i in.mkv -map 0:v -map 1:a -c copy -disposition:v:0 default
+  -disposition:a:0 default in_fixed.mkv` (LESSONS 32; a plain -c copy keeps the lag).
+
+
 **State 20.11.2026: v13 = crash-safe H.264 MKV quality recording.** Record now writes the final Matroska file from the
 first frame through an OBS-style ffmpeg-mux helper path. VideoToolbox creates H.264 packets at the live feed's exact
 dimensions and delivered FPS; ffmpeg packet-copies video and muxes AAC audio into one-second MKV clusters. LOW / MID / HIGH
