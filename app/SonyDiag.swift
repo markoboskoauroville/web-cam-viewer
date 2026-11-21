@@ -44,7 +44,7 @@ struct SonyDiagnosis {
         if wifiRemoteOpen { return "The camera's Wi-Fi remote is open." }
         if let u = usb, u.heldByOther {
             return "The camera is on USB and \(u.ownerName) holds it. TAKE CONTROL closes \(u.ownerName) and connects here over USB."
-                + (reachable ? " (It IS on Wi-Fi too, but its Wi-Fi remote is off while the cable has it.)" : "")
+                + (reachable ? " (It IS on Wi-Fi too, at \(address), but its remote port 15740 is closed.)" : "")
         }
         if let _ = usb { return "The camera is on USB and free: connecting over USB." }
         if reachable {

@@ -50,6 +50,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var meterTop: NSLayoutConstraint!
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
+    // v24: the take's sound warning under the bar, red, wrapping with the width: the bar's statistics key is clipped in a
+    // narrow window (seen at 883 pt in the slice: it showed only "2"), so the warning has its own line that is never cut
+    private let soundBanner = NSTextField(wrappingLabelWithString: "")
     private let meter = StereoMeter()
     private let timecode = NSTextField(labelWithString: "")
     private let feedStats = NSButton()
@@ -373,6 +376,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         message.maximumNumberOfLines = 0
         content.addSubview(message)
 
+        soundBanner.translatesAutoresizingMaskIntoConstraints = false
+        soundBanner.isHidden = true
+        soundBanner.textColor = .white
+        soundBanner.font = .systemFont(ofSize: 13, weight: .bold)
+        soundBanner.alignment = .center
+        soundBanner.drawsBackground = true
+        soundBanner.backgroundColor = NSColor(srgbRed: 0.85, green: 0.12, blue: 0.10, alpha: 0.92)
+        soundBanner.setAccessibilityIdentifier("sound-warning")
+
         // the meters: two hairlines (L, R) down the left edge, under the bar
         meter.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(meter)
@@ -477,6 +489,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         ])
         meterTop = meter.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
         meterTop.isActive = true
+        content.addSubview(soundBanner)   // after the Sony overlay, so it stays visible over it
+        NSLayoutConstraint.activate([
+            soundBanner.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 6),
+            soundBanner.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            soundBanner.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -32)])
         NotificationCenter.default.addObserver(self, selector: #selector(layoutPreview), name: NSView.frameDidChangeNotification, object: picture)
         picture.postsFrameChangedNotifications = true
 
@@ -809,6 +826,21 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 DispatchQueue.main.async { self.say("Cannot configure \(device.localizedName):\n\(error.localizedDescription)") }
             }
             if !self.session.isRunning { self.session.startRunning() }
+            // v24: startRunning applies the session preset (hd1920x1080) over the saved format, so a remembered
+            // 2560x1440 came back as 1920x1080 at every launch; the saved format and rate are put back once running
+            if let wanted = UserDefaults.standard.string(forKey: Self.captureFormatPreference(device)),
+               Self.captureFormatKey(device.activeFormat) != wanted,
+               let format = device.formats.first(where: { Self.captureFormatKey($0) == wanted }),
+               (try? device.lockForConfiguration()) != nil {
+                device.activeFormat = format
+                let savedRate = UserDefaults.standard.double(forKey: Self.captureRatePreference(device))
+                let rate = savedRate > 0 ? Self.supportedCaptureRate(savedRate, for: format) : Self.currentWholeFrameRate(device)
+                let duration = Self.captureDuration(rate, for: format)
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+                device.unlockForConfiguration()
+                self.fps = Int32(rate.rounded())
+            }
         }
     }
 
@@ -1321,6 +1353,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 .font: NSFont.systemFont(ofSize: 14, weight: .bold)]))
         }
         timecode.attributedStringValue = s
+        let w = soundWarningNow
+        soundBanner.isHidden = w == nil
+        if let w, soundBanner.stringValue != "⚠ " + w { soundBanner.stringValue = "⚠ " + w; soundBanner.setAccessibilityValue(w) }
         if soundWarningNow != nil, !feedStats.isHidden, ProcessInfo.processInfo.systemUptime - lastWarnDraw > 0.5 {
             lastWarnDraw = ProcessInfo.processInfo.systemUptime; updateFeedStats()
         }
@@ -1334,7 +1369,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         timecode.isHidden = true
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
-        liveRecorder = nil; liveWithoutSound = false
+        liveRecorder = nil; liveWithoutSound = false; soundBanner.isHidden = true
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
             self.lastTake = r.url.path; self.currentTake = nil
@@ -1573,7 +1608,7 @@ extension Viewer {
     func apiStatus() -> [String: Any] {
         let rec = isRecording
         let vertical = wantedID.map { UserDefaults.standard.bool(forKey: "slice." + $0) } ?? false
-        return ["camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
+        return ["version": VERSION, "camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
                 "quality": recordQuality.rawValue, "snapped": snapper.isSnapped,
