@@ -68,6 +68,7 @@ final class Recorder {
     private var heldAudio: [(CMTime, Data)] = []   // sound that came before the first video frame
     private(set) var audioSamplesWritten: Int64 = 0
     private(set) var lastAudioArrival: Date?
+    private(set) var lastAudibleArrival: Date?   // v26: the last buffer that was not all exact zeros
     private(set) var audioProblem: String?
     private var lastFLVDescription: CMFormatDescription?   // encoder thread
     private let createdAt = Date()
@@ -79,6 +80,9 @@ final class Recorder {
         if let audioProblem { return audioProblem }
         let since = lastAudioArrival ?? createdAt
         if Date().timeIntervalSince(since) > 2 { return lastAudioArrival == nil ? "NO SOUND is reaching the take" : "the sound STOPPED reaching the take" }
+        // v26: buffers of exact digital zeros (a virtual or muted input, e.g. NDI Audio with no source) are no sound either;
+        // a real microphone always has a noise floor, so a quiet room never triggers this
+        if Date().timeIntervalSince(lastAudibleArrival ?? createdAt) > 3 { return "the sound input sends only SILENCE (digital zero)" }
         return nil
     }
 
@@ -377,6 +381,7 @@ final class Recorder {
             }
         }
         lastAudioArrival = Date()
+        if pcm.contains(where: { $0 != 0 }) { lastAudibleArrival = lastAudioArrival }
         let pts = CMSampleBufferGetPresentationTimeStamp(sb)
         if firstVideoPTS == nil {
             // the sound before the first picture waits for it (at most 5 s), then the part before the picture is cut

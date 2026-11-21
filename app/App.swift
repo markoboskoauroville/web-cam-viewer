@@ -16,7 +16,7 @@ import AVFoundation
 // red under the mouse.
 // v21 (21.11.2026): the SONY key: our own Sony PTP control of the α7 V as an overlay over the picture (Sony*.swift).
 // v22 (21.11.2026): the current Picture Profile / lock key marked by a green border and title, also in an inactive window.
-let VERSION = 25
+let VERSION = 26
 let NAME = "Webcam Recorder (Mantra)"
 let APP_NAME = NAME   // v23: the updater kit (MANTRA_MANIFEST kits/mac-updater) names the app by APP_NAME
 
