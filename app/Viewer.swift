@@ -37,6 +37,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let recKey = RecordKey()
     private let qualityKey = NSButton()
     private let snapKey = NSButton()
+    private let folderKey = NSButton()
     private var snapper: SnapRemote!
     private let closeButton = NSButton()
     private let fullKey = FullKey()
@@ -273,11 +274,21 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         snapKey.target = self
         snapKey.action = #selector(snapTapped)
         snapKey.setAccessibilityIdentifier("snap")
-        snapKey.setContentHuggingPriority(.required, for: .horizontal)
+        snapKey.imagePosition = .imageOnly
         snapper = SnapRemote(window: window, say: { [weak self] in self?.say($0) }, changed: { [weak self] in self?.updateSnapKey() })
         updateSnapKey()
+        // v17: F opens the folder the takes are written to (~/Movies), beside S
+        folderKey.translatesAutoresizingMaskIntoConstraints = false
+        folderKey.isBordered = false
+        folderKey.imagePosition = .imageOnly
+        folderKey.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Recordings folder")?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .semibold))
+        folderKey.contentTintColor = .secondaryLabelColor
+        folderKey.target = self; folderKey.action = #selector(openFolder)
+        folderKey.setAccessibilityIdentifier("folder")
+        folderKey.toolTip = "Open the folder with your recordings (~/Movies)"
 
-        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, snapKey, feedStats])
+        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -312,6 +323,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         fullKey.setAccessibilityLabel("Full screen")
         fullKey.toolTip = "Full screen (⌘F), Escape goes back"
         bar.addSubview(fullKey)
+        bar.addSubview(snapKey)
+        bar.addSubview(folderKey)
 
         picture.translatesAutoresizingMaskIntoConstraints = false
         picture.wantsLayer = true
@@ -399,7 +412,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             fullKey.widthAnchor.constraint(equalToConstant: 30),
             fullKey.heightAnchor.constraint(equalToConstant: 30),
 
-            permissions.trailingAnchor.constraint(equalTo: fullKey.leadingAnchor, constant: -8),
+            snapKey.trailingAnchor.constraint(equalTo: fullKey.leadingAnchor, constant: -4),
+            snapKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            snapKey.widthAnchor.constraint(equalToConstant: 30), snapKey.heightAnchor.constraint(equalToConstant: 30),
+            folderKey.trailingAnchor.constraint(equalTo: snapKey.leadingAnchor, constant: -4),
+            folderKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            folderKey.widthAnchor.constraint(equalToConstant: 30), folderKey.heightAnchor.constraint(equalToConstant: 30),
+            permissions.trailingAnchor.constraint(equalTo: folderKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             picture.topAnchor.constraint(equalTo: content.topAnchor),
@@ -453,12 +472,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     private func updateSnapKey() {
         let on = snapper.isSnapped
-        snapKey.attributedTitle = NSAttributedString(string: on ? "SNAPPED ✓" : "SNAP REMOTE", attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
-            .foregroundColor: on ? NSColor.systemGreen : NSColor.white])
+        snapKey.image = NSImage(systemSymbolName: on ? "rectangle.split.2x1.fill" : "rectangle.split.2x1", accessibilityDescription: "Snap remote")?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .semibold))
+        snapKey.contentTintColor = on ? .systemGreen : .secondaryLabelColor
         snapKey.toolTip = on ? "Snapped to Sony Imaging Edge Remote: they move and resize as one. Click to unsnap."
             : "Snap Sony Imaging Edge Remote beside this window (opens it if closed); they then move and resize as one"
         snapKey.setAccessibilityLabel(on ? "Unsnap the Sony remote" : "Snap the Sony remote")
+    }
+
+    @objc private func openFolder() {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        if let take = lastTake, FileManager.default.fileExists(atPath: take) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: take)])   // the newest take, selected
+        } else { NSWorkspace.shared.open(movies) }
     }
 
     @objc private func closeTapped() { NSApp.terminate(nil) }
