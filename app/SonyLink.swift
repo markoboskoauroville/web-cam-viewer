@@ -7,7 +7,7 @@
 // "Set Camera Setting Sequence") and read back; a button (AEL, FEL, AWBL, movie REC) is SDIO_ControlDevice (0x9207) Down
 // then Up. The picture itself stays the HDMI capture: no live view is fetched over Wi-Fi.
 // The demo camera (SonyDemo) answers the same operations from memory, so the overlay can be seen and tested without the body.
-import Foundation
+import AppKit
 
 protocol SonyTransport: AnyObject {
     func tx(_ op: UInt16, _ params: [UInt32], out: Data?, timeout: Double) throws -> SonyReply
@@ -27,7 +27,7 @@ struct SonyFound: Equatable {
 struct SonySlot: Codable, Equatable { var gamma: UInt64; var color: UInt64 }
 
 final class SonyLink {
-    enum Phase: String { case idle, searching, notFound, needLogin, connecting, connected, failed }
+    enum Phase: String { case idle, searching, notFound, needLogin, connecting, connected, failed, usbBusy }
 
     // MARK: state, read and changed on the main thread only
     private(set) var phase: Phase = .idle
@@ -39,6 +39,8 @@ final class SonyLink {
     private(set) var busy: String?               // "reading the Picture Profile slots…" while a scan runs
     private(set) var slots: [UInt64: SonySlot] = [:]
     private(set) var log: [String] = []
+    private(set) var diagnosis: SonyDiagnosis?     // v23: the last staged check
+    private(set) var transport = ""                // v23: "Wi-Fi" | "USB" | "demo" while connected
     var onChange: (() -> Void)?
     var connected: Bool { phase == .connected }
 
@@ -134,10 +136,60 @@ final class SonyLink {
                 proceed(SonyFound(ip: addr, location: "", model: savedModel.isEmpty ? "Sony" : savedModel, name: "Sony", ssh: true), connectAfter: connectAfter); return
             }
         }
-        let ifs = SonySSDP.interfaces()
-        let onMantra = ifs.contains { $0.1.hasPrefix("192.168.1.") }
-        set(.notFound, (onMantra ? "No Sony answered on the Mantra network." : "This Mac is not on the Mantra router (192.168.1.x) now; the Sony cannot be reached on the Nothing hotspot.")
-            + " On the camera: Wi-Fi joined to “mantra” and Remote Shooting On.")
+        // v23: Wi-Fi gave no road. Measure every stage, then the cable: free = connect over USB, held = say by whom
+        let d = SonyDiagnosis.run(address: addr)
+        ui { self.diagnosis = d }
+        d.lines.forEach { say($0) }
+        if let u = d.usb, !u.heldByOther, connectAfter { connectUSB(); return }
+        set(d.usb?.heldByOther == true ? .usbBusy : .notFound, d.verdict)
+    }
+
+    /// v23: the staged check alone (GET /sony/status?check=1, the overlay's CHECK key), nothing is connected
+    func check(_ done: (() -> Void)? = nil) {
+        work.async {
+            let d = SonyDiagnosis.run(address: self.savedAddress)
+            self.ui { self.diagnosis = d; if !self.connected && self.phase != .connecting { self.message = d.verdict; if d.usb?.heldByOther == true { self.phase = .usbBusy } }; done?() }
+        }
+    }
+
+    /// v23: the Sony on the cable through ImageCaptureCore (USB Cnct Mode = Remote Shoot/Trn.)
+    private func connectUSB() {
+        if link != nil { return }
+        set(.connecting, "connecting over USB…")
+        let u = SonyUSB(log: say)
+        do {
+            try u.open()
+            let f = SonyFound(ip: "USB", location: "", model: SonyUSBPresence.find()?.product ?? u.name, name: u.name, ssh: false)
+            ui { self.found = f; self.loadSlots(f.model) }
+            try startSession(u)
+            ui { self.transport = "USB" }
+            set(.connected, "\(f.model) connected over USB")
+        } catch {
+            u.close(); link = nil
+            let held = SonyUSBPresence.find()
+            set(held?.heldByOther == true ? .usbBusy : .failed, held?.heldByOther == true
+                ? "The camera is on USB and \(held!.ownerName) holds it. TAKE CONTROL closes \(held!.ownerName) and connects here."
+                : "USB: \(error)")
+        }
+    }
+
+    /// v23: Marko pressed TAKE CONTROL: Imaging Edge Remote is asked to quit (as its own Quit would), then the cable is ours.
+    /// Never called by the app on its own: the program holding the camera is closed only by his press.
+    func takeControl() {
+        wantConnected = true
+        work.async {
+            guard let u = SonyUSBPresence.find(), u.heldByOther, let pid = u.ownerPID,
+                  let app = NSRunningApplication(processIdentifier: pid) else { self.findNow(connectAfter: true); return }
+            self.set(.connecting, "closing \(u.ownerName) so this app can hold the camera…")
+            DispatchQueue.main.sync { _ = app.terminate() }
+            let deadline = Date().addingTimeInterval(15)
+            while !app.isTerminated && Date() < deadline { usleep(200_000) }
+            guard app.isTerminated else { self.set(.usbBusy, "\(u.ownerName) did not close (it may be asking something in its window)."); return }
+            // the camera service takes the interface back; give it a moment, then connect
+            for _ in 0..<20 { if SonyUSBPresence.find()?.heldByOther == false { break }; usleep(250_000) }
+            usleep(800_000)
+            self.connectUSB()
+        }
     }
 
     private func remember(_ f: SonyFound) {
@@ -197,7 +249,8 @@ final class SonyLink {
             let p = try SonyPtpIp(host: host, port: port, guid: Self.guid, name: Self.pairName)
             say("PTP-IP up, the camera calls itself “\(p.cameraName)”")
             try startSession(p)
-            set(.connected, "\(f.model) connected")
+            ui { self.transport = "Wi-Fi" }
+            set(.connected, "\(f.model) connected over Wi-Fi")
         } catch {
             link?.close(); link = nil; tunnel.close()
             set(.failed, "\(error)")
@@ -258,6 +311,7 @@ final class SonyLink {
     private func lost(_ e: Error) {
         polling = false
         link?.close(); link = nil; tunnel.close()
+        ui { self.transport = "" }
         set(.failed, "connection lost: \(e)")
         if wantConnected && !demo {
             work.asyncAfter(deadline: .now() + 3) { if self.wantConnected && self.link == nil { self.findNow(connectAfter: true) } }
@@ -271,7 +325,7 @@ final class SonyLink {
             if let p = self.link { _ = try? p.tx(0x1003, [], out: nil, timeout: 3); p.close() }
             self.link = nil; self.tunnel.close(); self.raw = [:]
             let wasDemo = self.demo
-            self.ui { self.props = [:]; self.demo = false }
+            self.ui { self.props = [:]; self.demo = false; self.transport = "" }
             self.set(.idle, wasDemo ? "demo camera closed" : "disconnected")
         }
     }
@@ -287,7 +341,7 @@ final class SonyLink {
         work.async {
             if self.link != nil { return }
             self.ui { self.demo = true; self.found = SonyFound(ip: "demo", location: "", model: "ILCE-7M5 (demo)", name: "demo", ssh: false); self.loadSlots("ILCE-7M5 (demo)") }
-            do { try self.startSession(SonyDemo()); self.set(.connected, "DEMO camera: no Sony is touched, every value is simulated") }
+            do { try self.startSession(SonyDemo()); self.ui { self.transport = "demo" }; self.set(.connected, "DEMO camera: no Sony is touched, every value is simulated") }
             catch { self.set(.failed, "demo: \(error)") }
         }
     }
@@ -427,6 +481,51 @@ final class SonyLink {
                 _ = try select(original)
                 self.say("Picture Profile back to \(SonyLabels.ppShort(original))")
             } catch { self.lost(error) }
+        }
+    }
+
+    // MARK: v23, the local API (GET /sony/status, POST /sony/connect|disconnect|rec|set|check|takecontrol)
+    func apiStatus() -> [String: Any] {
+        func lab(_ c: UInt16) -> Any { orNull(props[c].map { SonyLabels.label(c, $0.value, type: $0.type) }) }
+        let recState: Any = orNull(props[0xD21D].map { $0.value == 1 ? "REC" : $0.value == 3 ? "waiting" : $0.value == 2 ? "failed" : "STBY" })
+        return ["connected": connected, "phase": phase.rawValue, "transport": transport, "message": message,
+                "model": orNull(found?.model), "address": connected ? (found?.ip ?? "") : savedAddress,
+                "rec": recState, "battery": lab(0xD218), "iso": lab(0xD21E), "shutter": lab(0xD20D), "fnumber": lab(0x5007),
+                "pictureProfile": orNull(props[0xD23F].map { SonyLabels.ppShort($0.value) }),
+                "settings": props.count, "settable": props.values.filter { $0.settable }.count, "busy": orNull(busy),
+                "diagnosis": orNull(diagnosis?.json), "log": Array(log.suffix(10))]
+    }
+
+    /// the current value of a setting as the camera last reported it, and every label it offers now
+    func apiProp(_ code: UInt16) -> [String: Any]? {
+        guard let p = props[code] else { return nil }
+        return ["code": sonyHex(code), "name": SonyLabels.name(code), "value": p.value, "label": SonyLabels.label(code, p.value, type: p.type),
+                "settable": p.settable, "options": p.options.map { SonyLabels.label(code, $0, type: p.type) }]
+    }
+
+    /// "0xD21E", "D21E", or a name the overlay shows ("ISO", "Shutter Speed"): the property code
+    func code(for key: String) -> UInt16? {
+        let k = key.trimmingCharacters(in: .whitespaces)
+        let hex = k.lowercased().hasPrefix("0x") ? String(k.dropFirst(2)) : k
+        if hex.count == 4, let v = UInt16(hex, radix: 16) { return v }
+        let n = k.lowercased()
+        let codes = Array(props.keys).sorted()
+        return codes.first { SonyLabels.name($0).lowercased() == n } ?? codes.first { SonyLabels.name($0).lowercased().contains(n) }
+    }
+
+    /// value by number, or by the label the camera's own list shows ("ISO 800", "1/50", "F4"); answered after read-back
+    func apiSet(key: String, value: UInt64?, label: String?, done: @escaping (Bool, String) -> Void) {
+        guard connected else { done(false, "not connected"); return }
+        guard let c = code(for: key), let p = props[c] else { done(false, "the camera reports no setting \(key)"); return }
+        var v = value
+        if v == nil, let label {
+            let want = label.lowercased().replacingOccurrences(of: " ", with: "")
+            v = p.options.first { SonyLabels.label(c, $0, type: p.type).lowercased().replacingOccurrences(of: " ", with: "") == want }
+        }
+        guard let v else { done(false, "\(SonyLabels.name(c)) offers: " + p.options.map { SonyLabels.label(c, $0, type: p.type) }.joined(separator: ", ")); return }
+        setValue(c, v) { ok in
+            let now = self.props[c].map { SonyLabels.label(c, $0.value, type: $0.type) } ?? "?"
+            done(ok, "\(SonyLabels.name(c)) = \(now)")
         }
     }
 }

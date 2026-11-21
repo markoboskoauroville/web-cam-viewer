@@ -16,8 +16,9 @@ import AVFoundation
 // red under the mouse.
 // v21 (21.11.2026): the SONY key: our own Sony PTP control of the α7 V as an overlay over the picture (Sony*.swift).
 // v22 (21.11.2026): the current Picture Profile / lock key marked by a green border and title, also in an inactive window.
-let VERSION = 22
+let VERSION = 23
 let NAME = "Webcam Recorder (Mantra)"
+let APP_NAME = NAME   // v23: the updater kit (MANTRA_MANIFEST kits/mac-updater) names the app by APP_NAME
 
 final class Delegate: NSObject, NSApplicationDelegate {
     var viewer: Viewer!
@@ -27,6 +28,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         viewer = Viewer(test: selftest != nil || CommandLine.arguments.contains("--quiet"))
         viewer.show()
         if let out = selftest { viewer.runSelftest(to: out) }
+        // v23 (update-at-start.md): a newer release on GitHub is offered at start; never in a test run
+        else if !CommandLine.arguments.contains("--quiet") && !CommandLine.arguments.contains("--sony-demo") { Updater.checkAtStart() }
     }
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows flag: Bool) -> Bool { viewer.show(); return false }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -56,6 +59,8 @@ enum Main {
     static let delegate = Delegate()
     static func main() {
         let a = CommandLine.arguments
+        // v23: a dead ffmpeg helper must make a pipe write fail (and the take say so), never kill the app with SIGPIPE
+        signal(SIGPIPE, SIG_IGN)
         // v21, SSH_ASKPASS: /usr/bin/ssh runs this same program to ask for the Sony's password; print it and leave.
         // A yes/no host question is never answered yes here: the fingerprint is approved in the overlay.
         let env = ProcessInfo.processInfo.environment

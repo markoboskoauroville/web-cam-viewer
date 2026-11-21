@@ -93,6 +93,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var feedPixelFormat = "—"
     private var lastAudioFormat: CMFormatDescription?   // capture queue
     private var recorder: Recorder?                     // capture queue
+    private var liveRecorder: Recorder?                 // v23: the same take, seen from the main thread (sound warning)
+    private var liveWithoutSound = false
+    private var lastWarnDraw: TimeInterval = 0                // v23: a sound input was chosen but the take has no sound track
     private var tcTimer: Timer?
     private var statsTimer: Timer?
     private var liveFrames = 0          // capture queue: frames of the chosen camera
@@ -380,6 +383,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let sh = NSShadow(); sh.shadowColor = .black; sh.shadowBlurRadius = 3; sh.shadowOffset = .zero
         timecode.shadow = sh
         timecode.setAccessibilityIdentifier("timecode")
+        timecode.alignment = .center; timecode.maximumNumberOfLines = 2   // v23: the sound warning goes under REC
         content.addSubview(timecode)
 
         // Live input facts beside the record key, in the dark input bar.
@@ -521,7 +525,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if open {
             if !overlay.isHidden { overlay.close() }
             sonyPanel.update()
-            if connect, !sonyLink.connected, [SonyLink.Phase.idle, .notFound, .failed].contains(sonyLink.phase) { sonyLink.findAndConnect() }
+            if connect, !sonyLink.connected, [SonyLink.Phase.idle, .notFound, .failed, .usbBusy].contains(sonyLink.phase) { sonyLink.findAndConnect() }
         }
         updateSonyKey()
     }
@@ -536,7 +540,17 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             + (on ? " · connected to \(sonyLink.found?.model ?? "the Sony")" : "") + " · Option-click: demo camera"
     }
 
-    @objc private func snapTapped() { snapper.toggle() }
+    @objc private func snapTapped() {
+        // v23: one program holds the camera's USB at a time. While SONY controls it over USB, opening Imaging Edge Remote
+        // would only meet a busy camera: say so; DISCONNECT in SONY gives the cable back, then S opens and snaps Remote.
+        if !snapper.isSnapped, sonyLink.connected, sonyLink.transport == "USB", NSRunningApplication.runningApplications(withBundleIdentifier: "com.sony.Remote").isEmpty {
+            let text = "The Sony is controlled from this window over USB.\nSONY → DISCONNECT first, then S opens Imaging Edge Remote."
+            say(text)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in if self?.message.stringValue == text { self?.say("") } }
+            return
+        }
+        snapper.toggle()
+    }
 
     private func updateSnapKey() {
         let on = snapper.isSnapped
@@ -887,6 +901,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         feedPixelFormat = format
         updateQualityKey()
         guard !feedStats.isHidden else { return }
+        if let w = soundWarningNow {
+            // v23: on the bar, in red, in place of the statistics, for as long as the take's sound is missing
+            feedStats.attributedTitle = NSAttributedString(string: "⚠ " + w, attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+                .foregroundColor: NSColor(srgbRed: 1, green: 0.231, blue: 0.188, alpha: 1)])
+            feedStats.setAccessibilityValue(w)
+            return
+        }
+        feedStats.setAccessibilityValue(nil)
         let degraded = drops > 0 || (measuredFPS > 0 && measuredFPS + 0.9 < Double(fps))
         var text = ""
         if width > 0, height > 0 { text += "\(width)×\(height) · " }
@@ -1247,17 +1270,25 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let width = self.sliceOn ? Slicer.outW : (self.capturedWidth > 0 ? self.capturedWidth : 1920)
         let height = self.sliceOn ? Slicer.outH : (self.capturedHeight > 0 ? self.capturedHeight : 1080)
         let quality = self.recordQuality
-        captureQueue.async {
+        // v23: a sound input is chosen but its first buffer has not come yet (just launched, just switched): wait for it
+        // up to 1.5 s, never start a take that silently has no sound track (v22 did, when lastAudioFormat was still nil)
+        func begin(_ tries: Int) {
+            if self.audioIn != nil && self.lastAudioFormat == nil && tries > 0 {
+                self.captureQueue.asyncAfter(deadline: .now() + 0.1) { begin(tries - 1) }
+                return
+            }
             do {
                 let r = try Recorder(fps: fps, width: width, height: height, quality: quality,
                                      vertical: self.sliceOn, title: title,
                                      audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
                 self.recorder = r
-                DispatchQueue.main.async { self.interrupted = false; self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
+                let noTrack = self.audioIn != nil && !r.hasAudioTrack
+                DispatchQueue.main.async { self.liveRecorder = r; self.liveWithoutSound = noTrack; self.interrupted = false; self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
             } catch {
                 DispatchQueue.main.async { self.say("Cannot record:\n\(error.localizedDescription)"); started?(nil) }
             }
         }
+        captureQueue.async { begin(15) }
     }
 
     private func recordingStarted(fps: Int32) {
@@ -1269,6 +1300,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         tcTimer = Timer.scheduledTimer(withTimeInterval: 1 / Double(fps) / 2, repeats: true) { _ in self.showTimecode(fps) }
     }
 
+    /// v23 (silent-failure.md): what is wrong with the take's sound now, nil while the sound is arriving
+    var soundWarningNow: String? {
+        guard liveRecorder != nil else { return nil }
+        if liveWithoutSound { return "NO SOUND: the sound input gave nothing, this take has no sound track" }
+        return liveRecorder?.soundWarning
+    }
+
     // the real-time clock, the same clock the file's time code starts from
     private func showTimecode(_ fps: Int32) {
         let t = Recorder.timecode(Date(), fps: fps).text
@@ -1277,7 +1315,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)])
         s.append(NSAttributedString(string: t, attributes: [
             .foregroundColor: NSColor.white, .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .bold)]))
+        if let w = soundWarningNow {
+            s.append(NSAttributedString(string: "\n⚠ " + w, attributes: [
+                .foregroundColor: NSColor(srgbRed: 1, green: 0.231, blue: 0.188, alpha: 1),
+                .font: NSFont.systemFont(ofSize: 14, weight: .bold)]))
+        }
         timecode.attributedStringValue = s
+        if soundWarningNow != nil, !feedStats.isHidden, ProcessInfo.processInfo.systemUptime - lastWarnDraw > 0.5 {
+            lastWarnDraw = ProcessInfo.processInfo.systemUptime; updateFeedStats()
+        }
     }
 
     func stopRecording(_ done: ((Recorder?) -> Void)? = nil) {
@@ -1288,6 +1334,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         timecode.isHidden = true
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
+        liveRecorder = nil; liveWithoutSound = false
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
             self.lastTake = r.url.path; self.currentTake = nil
@@ -1542,8 +1589,33 @@ extension Viewer {
                 "fps": Int(fps), "size": vertical ? "\(Slicer.outW)x\(Slicer.outH)" : "\(feedWidth)x\(feedHeight)",
                 "feed": ["width": feedWidth, "height": feedHeight, "format": feedPixelFormat,
                          "active": !feedStats.isHidden, "currentFPS": measuredFPS, "droppedFrames": measuredDrops],
-                "levels": lastLevels.map { Double($0) }]
+                "levels": lastLevels.map { Double($0) },
+                // v23: the take's sound, from the recorder itself
+                "sound": nn(UserDefaults.standard.bool(forKey: "nosound") ? nil : currentMic?.localizedName),
+                "soundWarning": nn(soundWarningNow),
+                "takeSoundSeconds": liveRecorder?.audioSecondsWritten ?? 0,
+                "sony": sonyLink.apiStatus()]
     }
+
+    /// v23: GET /sounds and POST /sound {"name"|"id"|"none": true}, the sound menu's own action (remembered)
+    func apiSounds() -> [[String: Any]] {
+        mics.map { ["name": $0.localizedName, "id": $0.uniqueID, "current": $0.uniqueID == currentMic?.uniqueID,
+                    "channels": $0.activeFormat.formatDescription.audioStreamBasicDescription.map { Int($0.mChannelsPerFrame) } ?? 0] }
+    }
+    func apiSetSound(name: String?, id: String?, none: Bool) -> (ok: Bool, error: String) {
+        if isRecording { return (false, "not while recording") }
+        if none { chooseMic(nil); return (true, "") }
+        var i: Int?
+        if let id { i = mics.firstIndex { $0.uniqueID == id } }
+        else if let name, !name.isEmpty {
+            let n = name.lowercased()
+            i = mics.firstIndex { $0.localizedName.lowercased() == n } ?? mics.firstIndex { $0.localizedName.lowercased().contains(n) }
+        }
+        guard let i else { return (false, "no such sound input") }
+        chooseMic(i)
+        return (true, "")
+    }
+    var sony: SonyLink { sonyLink }
 
     private var recordingFPS: Int32 {
         let live = Int32(max(1, min(120, measuredFPS.rounded())))

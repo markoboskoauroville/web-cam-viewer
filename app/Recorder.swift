@@ -59,6 +59,28 @@ final class Recorder {
     private(set) var startClock: Date?
     private(set) var startTimecode = ""
     private(set) var failed: String?
+    // v23: the audio side, for alignment and the "no sound" warning (capture queue unless said otherwise)
+    private var audioChannels = 0
+    private var audioRate: Double = 48000
+    private var audioBytesPerFrame = 4
+    private var firstVideoPTS: CMTime?          // the first frame given to the encoder = 0 in the file
+    private var audioAligned = false
+    private var heldAudio: [(CMTime, Data)] = []   // sound that came before the first video frame
+    private(set) var audioSamplesWritten: Int64 = 0
+    private(set) var lastAudioArrival: Date?
+    private(set) var audioProblem: String?
+    private var lastFLVDescription: CMFormatDescription?   // encoder thread
+    private let createdAt = Date()
+    var hasAudioTrack: Bool { audioFIFO != nil }
+    var audioSecondsWritten: Double { Double(audioSamplesWritten) / audioRate }
+    /// v23 (silent-failure.md): a take whose sound does not arrive must say so on the bar within 2 s
+    var soundWarning: String? {
+        guard hasAudioTrack else { return nil }
+        if let audioProblem { return audioProblem }
+        let since = lastAudioArrival ?? createdAt
+        if Date().timeIntervalSince(since) > 2 { return lastAudioArrival == nil ? "NO SOUND is reaching the take" : "the sound STOPPED reaching the take" }
+        return nil
+    }
 
     func bitrateOnDisk(after elapsed: TimeInterval) -> Int? {
         guard elapsed > 0,
@@ -131,10 +153,13 @@ final class Recorder {
         audioFIFO = fifo
         process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpeg)
+        // v23: the video comes as FLV tags carrying the capture time stamps. A raw H.264 elementary stream (v13 to v22) has
+        // no time stamps, and ffmpeg 9's scheduler then starved the audio input until the video ended: all the sound sat
+        // in one block behind the video at Stop (players reading in order lost it after 0.3 s; a crash lost it all).
         var args = [
             "-hide_banner", "-loglevel", "error", "-y",
             "-thread_queue_size", "1024",
-            "-f", "h264", "-r", "\(fps)", "-i", "pipe:0",
+            "-f", "flv", "-i", "pipe:0",
         ]
         if let fifo, let rawAudioFormat, let rawAudioRate, let rawAudioChannels {
             args += [
@@ -149,8 +174,9 @@ final class Recorder {
         args += [
             "-c:v", "copy",
         ]
-        if fifo != nil { args += ["-c:a", "aac", "-b:a", "256k"] }
+        if fifo != nil { args += ["-c:a", "aac", "-b:a", "256k", "-disposition:a:0", "default"] }
         args += [
+            "-disposition:v:0", "default",
             "-metadata", "timecode=\(startTimecode)",
             "-f", "matroska", "-cluster_time_limit", "1000",
             "-flush_packets", "1",
@@ -160,14 +186,20 @@ final class Recorder {
         process.standardInput = videoPipe
         process.standardError = errors
         try process.run()
+        audioChannels = rawAudioChannels ?? 0
+        audioRate = Double(rawAudioRate ?? 48000)
+        audioBytesPerFrame = (rawAudioChannels ?? 1) * ((rawAudioFormat == "s16le") ? 2 : 4)
         if let fifo {
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            // v23: the open waits on the writer queue itself, so every PCM write queued meanwhile follows it in order
+            // (v22 opened it elsewhere and DROPPED the sound that came before ffmpeg had probed the video: 1 to 1.7 s)
+            audioWriterQueue.async { [weak self] in
                 let handle = FileHandle(forWritingAtPath: fifo)
                 self?.audioLock.lock()
                 self?.audioHandle = handle
                 self?.audioLock.unlock()
             }
         }
+        try writeFLVHeader()
         try createEncoder()
     }
 
@@ -217,6 +249,11 @@ final class Recorder {
         guard !finishing, let session = compressionSession,
               let image = CMSampleBufferGetImageBuffer(sb) else { return }
         started = true
+        if firstVideoPTS == nil {
+            firstVideoPTS = CMSampleBufferGetPresentationTimeStamp(sb)
+            let held = heldAudio; heldAudio = []
+            for (pts, pcm) in held { writeAligned(pcm, pts: pts) }
+        }
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: image, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb),
             duration: CMSampleBufferGetDuration(sb), frameProperties: nil, sourceFrameRefcon: nil,
@@ -230,59 +267,71 @@ final class Recorder {
         Unmanaged<Recorder>.fromOpaque(refcon).takeUnretainedValue().writeEncoded(sampleBuffer)
     }
 
+    // MARK: v23, FLV on the pipe: each frame a tag with its own millisecond time stamp (from the capture clock)
+
+    private static func be24(_ v: Int) -> [UInt8] { [UInt8((v >> 16) & 0xFF), UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)] }
+    private static func be32(_ v: Int) -> [UInt8] { [UInt8((v >> 24) & 0xFF)] + be24(v) }
+
+    private func writeFLVHeader() throws {
+        // "FLV", version 1, flags 1 = video only, header size 9, then PreviousTagSize0 = 0
+        try videoPipe.fileHandleForWriting.write(contentsOf: Data([0x46, 0x4C, 0x56, 0x01, 0x01, 0, 0, 0, 9, 0, 0, 0, 0]))
+    }
+
+    /// one FLV video tag: type 9, size, time stamp (24 bits + 8 extended), stream 0, payload, then the tag's size
+    private func flvTag(_ payload: Data, ms: Int) -> Data {
+        var t = Data([9]); t.append(contentsOf: Self.be24(payload.count))
+        t.append(contentsOf: Self.be24(ms & 0xFFFFFF)); t.append(UInt8((ms >> 24) & 0x7F)); t.append(contentsOf: [0, 0, 0])
+        t.append(payload)
+        t.append(contentsOf: Self.be32(11 + payload.count))
+        return t
+    }
+
     private func writeEncoded(_ sb: CMSampleBuffer) {
-        guard let data = CMSampleBufferGetDataBuffer(sb) else { return }
+        guard let data = CMSampleBufferGetDataBuffer(sb), let description = CMSampleBufferGetFormatDescription(sb) else { return }
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
             as? [[CFString: Any]]
         let keyframe = !(attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        let origin = firstVideoPTS ?? pts
+        let ms = max(0, Int((CMTimeGetSeconds(CMTimeSubtract(pts, origin)) * 1000).rounded()))
         var out = Data()
-        if keyframe || !wroteEncodedHeader,
-           let description = CMSampleBufferGetFormatDescription(sb) {
-            var count = 0
-            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: 0,
-                parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: &count,
-                nalUnitHeaderLengthOut: nil)
-            for index in 0..<count {
-                var pointer: UnsafePointer<UInt8>?
-                var length = 0
-                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: index,
-                    parameterSetPointerOut: &pointer, parameterSetSizeOut: &length,
-                    parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr,
-                    let pointer else { continue }
-                out.append(contentsOf: [0, 0, 0, 1])
-                out.append(pointer, count: length)
-            }
+        // the AVC sequence header (the avcC record VideoToolbox made) first, and again whenever it changes
+        if lastFLVDescription == nil || (keyframe && !CMFormatDescriptionEqual(description, otherFormatDescription: lastFLVDescription)) {
+            let atoms = CMFormatDescriptionGetExtension(description,
+                extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms) as? [String: Any]
+            guard let avcC = atoms?["avcC"] as? Data else { failed = "H.264 encoder gave no avcC record"; return }
+            var p = Data([0x17, 0, 0, 0, 0]); p.append(avcC)
+            out.append(flvTag(p, ms: ms))
+            lastFLVDescription = description
             wroteEncodedHeader = true
         }
-        var pointer: UnsafeMutablePointer<Int8>?
+        // the frame itself: VideoToolbox's samples are already length-prefixed NAL units (AVCC), as FLV wants them
         var length = 0
+        var pointer: UnsafeMutablePointer<Int8>?
         guard CMBlockBufferGetDataPointer(data, atOffset: 0, lengthAtOffsetOut: nil,
                                           totalLengthOut: &length, dataPointerOut: &pointer) == noErr,
               let pointer else { return }
-        let bytes = UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self)
-        var nalHeaderLength: Int32 = 4
-        if let description = CMSampleBufferGetFormatDescription(sb) {
-            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(description, parameterSetIndex: 0,
-                parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: nil,
-                nalUnitHeaderLengthOut: &nalHeaderLength)
+        var frame = Data([keyframe ? 0x17 : 0x27, 1, 0, 0, 0])   // frame type + AVC, NALU, composition time 0 (no B-frames)
+        if CMBlockBufferIsRangeContiguous(data, atOffset: 0, length: length) {
+            frame.append(UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self), count: length)
+        } else {
+            var copy = Data(count: length)
+            copy.withUnsafeMutableBytes { _ = CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: length, destination: $0.baseAddress!) }
+            frame.append(copy)
         }
-        let headerLength = Int(nalHeaderLength)
-        var offset = 0
-        while offset + headerLength <= length {
-            var size = 0
-            for i in 0..<headerLength { size = size << 8 | Int(bytes[offset + i]) }
-            offset += headerLength
-            guard size > 0, offset + size <= length else { break }
-            out.append(contentsOf: [0, 0, 0, 1])
-            out.append(bytes.advanced(by: offset), count: size)
-            offset += size
-        }
+        out.append(flvTag(frame, ms: ms))
         do { try videoPipe.fileHandleForWriting.write(contentsOf: out) }
         catch { failed = error.localizedDescription }
     }
 
     func appendAudio(_ sb: CMSampleBuffer) {
         guard !finishing, audioFIFO != nil, CMSampleBufferDataIsReady(sb) else { return }
+        // v23: a sound input that changes its format in the middle of a take cannot go on into the same track: say so
+        if let d = CMSampleBufferGetFormatDescription(sb), let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(d)?.pointee,
+           Int(asbd.mSampleRate) != Int(audioRate) || Int(asbd.mBitsPerChannel) / 8 * min(2, max(1, Int(asbd.mChannelsPerFrame))) != audioBytesPerFrame {
+            if audioProblem == nil { audioProblem = "the sound input CHANGED FORMAT: no sound from here on" }
+            return
+        }
         var size = 0
         CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, bufferListSizeNeededOut: &size, bufferListOut: nil,
             bufferListSize: 0, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil)
@@ -295,23 +344,66 @@ final class Recorder {
             bufferListSize: capacity, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
             flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block) == noErr else { return }
         let buffers = Array(UnsafeMutableAudioBufferListPointer(list))
-        guard let first = buffers.first, let data = first.mData else { return }
-        let pcm: Data
-        if buffers.count == 1 {
-            pcm = Data(bytes: data, count: Int(first.mDataByteSize))
-        } else {
-            let bytesPerSample = max(1, Int(first.mDataByteSize) / max(1, Int(first.mNumberChannels) * Int(CMSampleBufferGetNumSamples(sb))))
-            let frames = max(1, Int(first.mDataByteSize) / (bytesPerSample * max(1, Int(first.mNumberChannels))))
-            var interleaved = Data()
-            for frame in 0..<frames {
-                for buffer in buffers {
-                    if let base = buffer.mData {
-                        interleaved.append(Data(bytes: base.advanced(by: frame * bytesPerSample), count: bytesPerSample))
+        let frames = Int(CMSampleBufferGetNumSamples(sb))
+        guard let first = buffers.first, first.mData != nil, frames > 0 else { return }
+        let want = max(1, audioChannels)
+        let sampleBytes = audioBytesPerFrame / want
+        var pcm = Data(count: frames * audioBytesPerFrame)
+        pcm.withUnsafeMutableBytes { dst in
+            guard let out = dst.baseAddress else { return }
+            if buffers.count == 1 {
+                // interleaved: keep the first `want` channels of each frame (a 4-channel interface gives its first two)
+                let have = max(1, Int(first.mNumberChannels))
+                let src = first.mData!
+                let usable = min(frames, Int(first.mDataByteSize) / (have * sampleBytes))
+                if have == want {
+                    memcpy(out, src, usable * audioBytesPerFrame)
+                } else {
+                    for f in 0..<usable {
+                        for ch in 0..<want {
+                            memcpy(out + (f * want + ch) * sampleBytes, src + (f * have + min(ch, have - 1)) * sampleBytes, sampleBytes)
+                        }
+                    }
+                }
+            } else {
+                // one buffer per channel: interleave the first `want`
+                for f in 0..<frames {
+                    for ch in 0..<want {
+                        let b = buffers[min(ch, buffers.count - 1)]
+                        guard let src = b.mData, (f + 1) * sampleBytes <= Int(b.mDataByteSize) else { continue }
+                        memcpy(out + (f * want + ch) * sampleBytes, src + f * sampleBytes, sampleBytes)
                     }
                 }
             }
-            pcm = interleaved
         }
+        lastAudioArrival = Date()
+        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        if firstVideoPTS == nil {
+            // the sound before the first picture waits for it (at most 5 s), then the part before the picture is cut
+            heldAudio.append((pts, pcm))
+            if heldAudio.count > 250 { heldAudio.removeFirst() }
+            return
+        }
+        writeAligned(pcm, pts: pts)
+    }
+
+    /// v23: the first sound sample written is the one at the first video frame's time (cut before it, silence if later),
+    /// so the file's audio 0 is the picture's 0. After that the sound runs on by its own sample count.
+    private func writeAligned(_ input: Data, pts: CMTime) {
+        var pcm = input
+        if !audioAligned, let v0 = firstVideoPTS {
+            let offset = CMTimeGetSeconds(CMTimeSubtract(pts, v0))
+            let frames = Int((abs(offset) * audioRate).rounded())
+            if offset < 0 {
+                let cut = frames * audioBytesPerFrame
+                if cut >= pcm.count { return }          // all of it before the picture
+                pcm = pcm.subdata(in: cut..<pcm.count)
+            } else if frames > 0 {
+                pcm = Data(count: min(frames, Int(audioRate) * 5) * audioBytesPerFrame) + pcm
+            }
+            audioAligned = true
+        }
+        audioSamplesWritten += Int64(pcm.count / max(1, audioBytesPerFrame))
         audioWriterQueue.async { [weak self] in
             guard let self else { return }
             self.audioLock.lock()
@@ -319,7 +411,7 @@ final class Recorder {
             self.audioLock.unlock()
             guard let handle else { return }
             do { try handle.write(contentsOf: pcm) }
-            catch { self.failed = error.localizedDescription }
+            catch { if self.audioProblem == nil { self.audioProblem = "the sound could not be written: \(error.localizedDescription)" } }
         }
     }
 
@@ -350,6 +442,11 @@ final class Recorder {
                         finishWhenMuxedOut()
                     }
                     return
+                }
+                if let fifo = self.audioFIFO {
+                    // ffmpeg gone before it opened the sound pipe: open its read end once so the writer queue is released
+                    self.audioLock.lock(); let opened = self.audioHandle != nil; self.audioLock.unlock()
+                    if !opened { let fd = open(fifo, O_RDONLY | O_NONBLOCK); if fd >= 0 { usleep(100_000); close(fd) } }
                 }
                 if self.process.isRunning {
                     self.process.terminate()

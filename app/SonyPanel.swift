@@ -136,7 +136,11 @@ final class SonyPanel: NSView {
 
     // header
     private let title = label("SONY", size: 13, weight: .bold)
-    private let status = label("", size: 12, color: white.withAlphaComponent(0.85), lines: 3)
+    private let status = label("", size: 12, color: white.withAlphaComponent(0.85), lines: 0)
+    // v23: the staged check, one measured line per stage, and the two keys it may need
+    private let stages = label("", size: 11, color: white.withAlphaComponent(0.75), lines: 0)
+    private let takeKey = NSButton(title: "TAKE CONTROL (closes Imaging Edge Remote)", target: nil, action: nil)
+    private let checkKey = NSButton(title: "CHECK", target: nil, action: nil)
     private let connectKey = NSButton(title: "CONNECT", target: nil, action: nil)
     private let address = NSTextField(string: "")
     private let demoKey = NSButton(title: "DEMO", target: nil, action: nil)
@@ -201,6 +205,8 @@ final class SonyPanel: NSView {
             doc.addSubview(b)
         }
         key(connectKey, #selector(connectTapped), "sony-connect", "Find the Sony on the network and connect (or disconnect)")
+        key(takeKey, #selector(takeTapped), "sony-takecontrol", "Imaging Edge Remote holds the camera's USB connection: close it and control the camera from this window")
+        key(checkKey, #selector(checkTapped), "sony-check", "Check every stage again: the Mac's network, the camera's address, SSDP, the remote ports, the USB cable")
         key(demoKey, #selector(demoTapped), "sony-demo", "A pretend camera: shows every control without touching the Sony")
         key(closeKey, #selector(hideTapped), "sony-hide", "Hide the Sony controls (SONY key or Escape)")
         key(loginKey, #selector(loginTapped), "sony-login", "The fingerprint above is the same as on the camera's Access Authen. Info: save it, the user and password, and connect")
@@ -227,7 +233,9 @@ final class SonyPanel: NSView {
         userField.setAccessibilityLabel("Camera user")
         passField.placeholderString = "password"
         passField.setAccessibilityLabel("Camera password")
-        for v in [title, status, address, finger, userField, passField, ppHead, keysHead, facts, mainHead, moreHead] { doc.addSubview(v) }
+        stages.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        stages.setAccessibilityIdentifier("sony-stages")
+        for v in [title, status, stages, address, finger, userField, passField, ppHead, keysHead, facts, mainHead, moreHead] { doc.addSubview(v) }
         title.setAccessibilityLabel("Sony")
         update()
     }
@@ -245,6 +253,13 @@ final class SonyPanel: NSView {
         if s.isEmpty { s = "Not connected. CONNECT finds the camera on the Mantra network; DEMO shows the controls without it." }
         if let last = link.log.last, last != s, link.connected { s += "\n" + last }
         status.stringValue = s
+        // v23: the stages stay visible while not connected; TAKE CONTROL only while another program holds the cable
+        let d = link.diagnosis
+        stages.isHidden = link.connected || d == nil
+        stages.stringValue = d?.lines.joined(separator: "\n") ?? ""
+        takeKey.isHidden = link.phase != .usbBusy
+        if let n = d?.usb?.ownerName, !n.isEmpty, d?.usb?.heldByOther == true { takeKey.title = "TAKE CONTROL (closes \(n))" }
+        checkKey.isHidden = link.connected || link.phase == .connecting || link.phase == .searching
         connectKey.title = link.connected || link.phase == .connecting || link.phase == .searching ? "DISCONNECT" : "CONNECT"
         demoKey.isHidden = link.connected && !link.demo
         demoKey.title = link.demo ? "DEMO ✓" : "DEMO"
@@ -385,6 +400,8 @@ final class SonyPanel: NSView {
         }
         row([title, connectKey, address, demoKey, closeKey])
         text(status)
+        row([takeKey, checkKey])
+        text(stages)
         if !finger.isHidden { text(finger); row([userField, passField, loginKey]) }
         text(ppHead); row([pp1Key, slogKey, ppPopup, scanKey])
         text(keysHead); row([recKey, aelKey, felKey, awblKey])
@@ -401,6 +418,8 @@ final class SonyPanel: NSView {
     }
     @objc private func demoTapped() { if link.demo { link.disconnect() } else if !link.connected { link.startDemo() } }
     @objc private func hideTapped() { onClose?() }
+    @objc private func takeTapped() { link.takeControl() }
+    @objc private func checkTapped() { link.savedAddress = address.stringValue; link.check() }
     @objc private func loginTapped() {
         link.approveAndConnect(user: userField.stringValue, password: passField.stringValue)
         passField.stringValue = ""
