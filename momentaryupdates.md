@@ -132,9 +132,18 @@ and MAC, SSDP, port 15740/22, camera on USB and who holds it) and name the exact
 the same diagnosis on GET /sony/status. C: connect and control the real body: Wi-Fi PTP-IP first, USB PTP (ImageCaptureCore)
 second behind the same SonyLink calls; never steal the USB session from Imaging Edge Remote silently (a TAKE CONTROL key).
 Built as v23 by GitHub only; lessons, takeover, a webcam-recorder skill, the manifest and Queen's skill written back.
+**Status (21.11.2026): built and installed as v27 (v23 → v27).** Sound: fixed and proven (see the next request). Sony: the
+staged check runs against the body and says what it measured: camera on Wi-Fi at 192.168.1.100 (MAC 80:99:9B:13:AD:3F, answers
+ping), remote ports 15740/22 closed, no SSDP, the USB cable held by Imaging Edge Remote. The USB road and TAKE CONTROL are built;
+control of the body is NOT yet verified: it needs Imaging Edge Remote closed, which is Marko's press of TAKE CONTROL.
 
 Marko: "This is the recording. There is a bit of sound at the beginning, maybe one third of the second, and then it's gone. /Volumes/EXT_1TB/WEBRECORDING/mb_2026-11-21_13-50-08.mkv"
 **Measured by the master (21.11.2026, read only):** the sound of that take is not interleaved. A handful of audio packets
 sit at the start of the file; the audio from 0.09 s to about 227 s sits in one block at byte 1.42 GB, written at Stop, behind
 227 s of video. ffmpeg decodes it, but players that read in file order (IINA, DaVinci Resolve) run out of sound after a
 fraction of a second, and a hard kill would have lost the sound completely. Audio track default flag was 0.
+**Status (21.11.2026): fixed in v23, installed v27.** Cause: the raw H.264 pipe (no time stamps) made ffmpeg 9 starve the sound
+FIFO until Stop; also the first 1.0 to 1.7 s of sound were dropped. Before the fix (v22): 60 s takes lagged 48 to 50 s in file
+order. After: 60 s and 240 s takes in slice HIGH, max lag 0.0 s, 240 s packets 11260 / 11258, kill -9 at 30 s kept its sound to
+0.04 s of the video end. The original take is untouched; repair (not run): ffmpeg -i in.mkv -i in.mkv -map 0:v -map 1:a -c copy
+-disposition:v:0 default -disposition:a:0 default out.mkv.
