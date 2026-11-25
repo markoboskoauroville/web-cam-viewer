@@ -1,5 +1,32 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v30 = SYNC: every sound input on the camera's frame (phase 1 of docs/AVSYNC_PLAN.md).**
+Marko (momentaryupdates.md): "It must be exactly in the same frame, the sound ... I can use any microphone." and, on the
+plan, "We are not going to use paid Apple account for now ... Yes."
+- **In every take:** the chosen sound input is moved by `sync.audioDelayMs.<audioUID>` minus `sync.videoDelayMs.<videoUID>`
+  (the VIRTUALCAM_PLAN §7 keys) where Recorder places its first sample (AudioTrack in Recorder.swift). Seeded on first run
+  from avsync.json (never over a value set by hand): RØDE NT1 +72.5, MacBook Pro Microphone +44.2, External Microphone
+  +74.6 ms; UGREEN 15389 (A) is the reference, 0. Switching the sound input switches the value.
+- **Camera scratch track:** while another input is chosen, a second capture session keeps UGREEN 15389 (A) open from
+  launch (its start walk, LESSONS 48) and every take carries it as audio track 2 "camera scratch" (AAC 128k, not
+  default); silence fills it if it stops, so it never stalls the take. `POST /sync {"scratch": false}` turns it off.
+- **SYNC key** beside the sound menu ("SYNC +73" for 72.5; AX title SYNC, value "+72.5 ms"), opens a box: value, -10 -1
+  +1 +10, RESET (back to the measured value), CLOSE, every stored value, picture delay. Escape closes it.
+- **API:** `GET /sync`, `POST /sync {ms|delta|reset, uid|name?} | {audio:{uid,ms}} | {video:{uid?,ms}} | {scratch}`;
+  /status has `sync` {audioDelayMs, videoDelayMs, appliedMs, scratch, take{audioShiftMs, corrections, jumps, driftMs, scratch}}.
+- **Drift / jumps:** each buffer's stamp is compared with the sample count; > 1 ms smoothed = one sample dropped or repeated
+  per buffer every 2 s check; two buffers > 70 ms off = placed again. Measured: the stamps carry no drift (0 corrections),
+  so the real clock drift (RØDE vs camera −0.14 ms/min) is NOT corrected yet: v31 (arrival-time envelope, LESSONS 49).
+- **Verified on the installed v30 (11:25-11:42, all via the API, RØDE as input):** check_take pass on first take after
+  launch (8 s), LOW 10 s, slice HIGH 60 s and 240 s, kill -9 at 30 s (audio end +0.12 s of video end), max lag 0.0 s on all.
+  `tools/check_sync.py` (new): chirp train from the ADAM, delay 0 → −72.04 ms, delay +72.5 → **+0.53 ms** (IQR 0.02);
+  windows on his YouTube sound: 240 s take median +0.17 ms, 30 s blocks within ±0.3 ms; first take after launch +4.36 ms
+  (camera sound still walking), +0.96 at 2 min, +0.42 at 3 min.
+- **Not in v30 (v31):** AUTO MEASURE in the app (tools/avsync.py measures; the app reads avsync.json), drift correction from
+  arrival times, the picture side of the camera sound (clap test, AVSYNC_PLAN §1.4: until then camera sound = picture),
+  live delay line for VirtualCam/monitoring. The bar's minimum width grew from 917 to 958 pt (SYNC never cut).
+
+
 **State 25.11.2026: v29 = no flicker in the vertical slice; (V)/(A) names; "30 FPS max"; capture mode follows a new USB id.**
 Marko (word for word in momentaryupdates.md): the picture flickers "only ... in vertical slice", a strange square next to
 UGREEN, "remove the slice from the name", "60 FPS max, 30 FPS max".

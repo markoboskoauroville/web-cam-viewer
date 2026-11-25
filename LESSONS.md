@@ -150,3 +150,24 @@
 45. **POST /fullscreen moves the window to the first screen (the BenQ).** To give Marko his full screen back on the MacBook,
     move the window there and press the window's own Full screen key (`macro ax-press ... "Full screen"`). ax-press cannot
     press a key that pops a menu (AX -25204): open it with a real click at its AX position inside `guard run`.
+46. **The sync delay is one number per sound input, applied where the sound is placed (v30, 25.11.2026).** The α7 V's own
+    HDMI sound (UGREEN 15389 (A)) is the reference; every other input is moved by `sync.audioDelayMs.<uid>` (minus the
+    camera's `sync.videoDelayMs.<uid>`) in the first-sample placement: position = (pts + shift − first video pts) × rate.
+    No change to the FLV pipe, the FIFO order or the flags (LESSONS 28-31 hold: check_take max lag 0.0 s on every v30 take).
+    Proof on the installed v30 with chirps from the ADAM, RØDE vs the camera scratch in the same take: delay 0 → −72.04 ms
+    (IQR 0.01, 25 chirps); delay +72.5 → +0.53 ms (IQR 0.02, 17 chirps).
+47. **A third ffmpeg input (the camera scratch FIFO) interleaves fine, but must never be able to stall the take.** Tried
+    offline first (FLV + two PCM FIFOs, 20 s, max lag 0 on both tracks). In the app a scratch input that sends nothing is
+    filled with silence up to 1 s behind the picture, so ffmpeg never waits on it (`padded` in /status sync.take).
+48. **The camera sound walks for minutes after its stream opens, so keep it open from launch (v30).** RØDE vs camera in
+    takes after a launch: +4.36 ms at 0-1 min, +0.96 ms at 2 min, +0.42 ms at 3 min, +0.15 ms at 5-9 min (AVSYNC_PLAN
+    §1.1, seen again inside real takes). The scratch session holds UGREEN 15389 (A) from launch while another input is chosen.
+49. **The capture stamps carry no clock drift (v30).** Every buffer's pts matched the sample count exactly (`driftMs`
+    0.00 and 0 corrections in every take, 8 s to 240 s), so a stamp-based drift correction does nothing for these inputs:
+    their drift against the host clock (UGREEN/Apple −3 ppm, RØDE −0.7 ppm, RØDE vs camera −0.14 ms/min) is only seen in
+    the arrival times. Correcting it needs the arrival-time envelope (avsync.py clocks) = v31. In a 240 s take the residual
+    stayed within ±0.3 ms per 30 s block (trend −0.11 ms/10 min).
+50. **Judge a take's sync from the take itself: `tools/check_sync.py`.** Track 1 (the chosen input) against track 2
+    (camera scratch): chirps when present, else 1 s windows of any sound over −40 dBFS (music worked: IQR 0.15-0.24 ms).
+    Quiet windows (room noise, −47 dBFS) gave false peaks of ±100-200 ms before the level gate: never trust a low-level window.
+

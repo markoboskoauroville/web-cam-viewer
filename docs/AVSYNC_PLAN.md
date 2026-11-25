@@ -5,6 +5,9 @@ audio is not in sync ... You can use audio from Sony itself as scratch track and
 much is delay and then find the way how to calculate delay for every device ... It must be exactly in the same frame, the
 sound. So when I'm doing my online lessons with drumming, there is no shift, and I can use any microphone."
 
+**Status 25.11.2026: §2 (takes), §3 (SYNC key without AUTO MEASURE) and §4 (`tools/check_sync.py`) are built in v30;
+see TAKEOVER. Drift from arrival times, AUTO MEASURE, §1.4 and the live paths: v31.**
+
 Phase 1 (this document and `tools/avsync.py`): measure, then design. **No app code is changed yet**; a design review comes
 first. Companion: docs/VIRTUALCAM_PLAN.md §7 (the same delay values feed Mantra VirtualCam; the keys below are the ones it
 already names).
