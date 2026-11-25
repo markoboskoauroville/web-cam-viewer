@@ -57,6 +57,7 @@ final class VirtualCam {
     private var sentTotal = 0, sentUnique = 0
     private var latencies: [Double] = [], processing: [Double] = [], arrivals: [Double] = [], converts: [Double] = []
     private var lastFreshAt = 0.0, lastFreshPTS = 0.0, period = 1.0 / 30
+    private var pvMs = 0.0                // Pv: our own path (capture stamp → frame ready), median, refreshed with the hold
     private var fpsUnique = 0.0, fpsSend = 0.0, fpsAt = 0.0, fpsU0 = 0, fpsS0 = 0
     private var stalledSince: Double?
     private(set) var conflict = false
@@ -313,6 +314,7 @@ final class VirtualCam {
         lock.lock()
         videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req
         holdMs = min(max(0, req), cap)
+        pvMs = Self.median(processing) ?? 0
         lock.unlock()
         holdAt = Self.now()
     }
@@ -322,7 +324,9 @@ final class VirtualCam {
         let now = Self.now()
         if now - holdAt > 0.25 { refreshHold() }
         lock.lock()
-        let hold = holdMs / 1000
+        // with a hold, a frame leaves at capture + Pv + hold (VIRTUALCAM_BUILD §5): the hold is added on top of our own path,
+        // on the capture clock, so the picture's latency is steady (the arrival jitter of the card is taken out)
+        let hold = holdMs > 0 ? (holdMs + pvMs) / 1000 : 0
         var pick: Int?
         for (i, f) in ring.enumerated() where f.pts + hold <= now { pick = i }
         var fresh: Frame?
@@ -435,13 +439,13 @@ final class VirtualCam {
             "problem": nn2(problem), "note": nn2(note), "warnings": warnings,
             "framesReceived": received, "framesSent": sentTotal, "uniqueFramesSent": sentUnique,
             "fps": Self.r1(fpsUnique), "sendFps": Self.r1(fpsSend),
-            "latencyMs": nn2(lat.map(Self.r1)), "latencyWithoutHoldMs": nn2(lat.map { Self.r1($0 - holdMs) }),
+            "latencyMs": nn2(lat.map(Self.r1)), "latencyWithoutHoldMs": nn2(lat.map { Self.r1($0 - holdMs) }), "PvMs": Self.r1(pvMs),
             "processingMs": nn2(Self.median(processing).map(Self.r1)),
             "arrivalMs": nn2(Self.median(arrivals).map(Self.r1)), "convertMs": nn2(Self.median(converts).map(Self.r1)),
             "inputPeriodMs": Self.r1(period * 1000),
             "delay": ["videoDelayMs": videoDelayMs, "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
                       "appliedMs": Self.r1(holdMs), "maxHoldMs": capMs, "capped": capped,
-                      "formula": "sync.videoDelayMs.<video id> + virtualcam.trimMs + extraDelayMs (audio path, v33)"] as [String: Any],
+                      "formula": "hold = sync.videoDelayMs.<video id> + virtualcam.trimMs + extraDelayMs (audio path, v33); a held frame leaves at capture + Pv + hold"] as [String: Any],
             "delayApplied": Self.r1(holdMs),
             "droppedFrames": busyDrops + poolDrops + ringDrops,
             "drops": ["converterBusy": busyDrops, "poolLimit": poolDrops, "ringOverflow": ringDrops, "sinkQueueFull": queueFullDrops,

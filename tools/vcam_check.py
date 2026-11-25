@@ -110,18 +110,20 @@ def main():
     if not rows:
         print(json.dumps({"ok": False, "error": "no frames"})); return 1
     span = rows[-1]["arrive"] - rows[0]["arrive"]
-    distinct = 1 + sum(1 for x, y in zip(rows, rows[1:]) if x["sig"] != y["sig"])
+    # a new picture = a new stamp (VCAM's test stamp); without stamps the sparse pixel grid (a still scene counts less)
+    key = "stamp" if all(r["stamp"] for r in rows) else "sig"
+    distinct = 1 + sum(1 for x, y in zip(rows, rows[1:]) if x[key] != y[key])
     deliver = sorted((r["arrive"] - r["pts"]) * 1000 for r in rows)
     whole = sorted((r["arrive"] - r["stamp"]) * 1000 for r in rows if r["stamp"])
     # distinct pictures only (the first buffer of each picture): the path of a new picture
-    firsts = [r for i, r in enumerate(rows) if i == 0 or r["sig"] != rows[i - 1]["sig"]]
+    firsts = [r for i, r in enumerate(rows) if i == 0 or r[key] != rows[i - 1][key]]
     whole_new = sorted((r["arrive"] - r["stamp"]) * 1000 for r in firsts if r["stamp"])
     gaps = sorted((y["arrive"] - x["arrive"]) * 1000 for x, y in zip(rows, rows[1:]))
     med = lambda v: round(v[len(v) // 2], 2) if v else None
     pct = lambda v, p: round(v[min(len(v) - 1, int(len(v) * p))], 2) if v else None
     res = {"ok": True, "frames": len(rows), "seconds": round(span, 3), "size": f"{rows[0]['w']}x{rows[0]['h']}",
            "fps": round((len(rows) - 1) / span, 2) if span > 0 else None,
-           "distinctPictures": distinct, "distinctFps": round((distinct - 1) / span, 2) if span > 0 else None,
+           "distinctPictures": distinct, "distinctBy": key, "distinctFps": round((distinct - 1) / span, 2) if span > 0 else None,
            "gapMs": {"median": med(gaps), "p95": pct(gaps, 0.95), "max": round(gaps[-1], 2) if gaps else None},
            "deliveryMs": {"median": med(deliver), "p95": pct(deliver, 0.95)},
            "stamped": len(whole),
