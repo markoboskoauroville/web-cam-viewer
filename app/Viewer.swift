@@ -2014,7 +2014,7 @@ extension Viewer {
     }
 
     // v36: the delay in ms, frames (the record frame rate) and samples (the input's own rate), and presets
-    var syncFPS: Double { Double(max(1, recordingFPS)) }
+    var syncFPS: Double { Double(max(1, fps)) }   // v37: the capture mode's frame rate (30), not the measured one (29.x)
     func syncRate(_ d: AVCaptureDevice?) -> Double {
         d?.activeFormat.formatDescription.audioStreamBasicDescription.map { $0.mSampleRate }.flatMap { $0 > 0 ? $0 : nil } ?? 48000
     }
@@ -2062,6 +2062,7 @@ extension Viewer {
         let fps = syncFPS, rate = syncRate(d)
         return ["ms": ms, "frames": (Sync.toUnit(ms, .frames, fps: fps, rate: rate) * 10000).rounded() / 10000,
                 "samples": (Sync.toUnit(ms, .samples, fps: fps, rate: rate) * 1000).rounded() / 1000,
+                "ms3": (ms * 1000).rounded() / 1000,
                 "fps": fps, "rate": rate, "text": Sync.threeUnits(ms, fps: fps, rate: rate), "unitShown": Sync.unit.rawValue]
     }
 

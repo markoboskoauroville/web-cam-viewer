@@ -30,8 +30,8 @@ enum Sync {
         UserDefaults.standard.object(forKey: videoKey(uid)).flatMap { ($0 as? NSNumber)?.doubleValue } ?? 0
     }
     static func setAudio(_ uid: String, _ ms: Double) {
-        // v36: kept to the microsecond (a whole number of samples or a fraction of a frame must survive; v30-v35: 0.1 ms)
-        UserDefaults.standard.set((max(-1000, min(1000, ms)) * 1000).rounded() / 1000, forKey: audioKey(uid))
+        // v36-v37: kept to the nanosecond (a whole number of samples or a fraction of a frame must survive; v30-v35: 0.1 ms)
+        UserDefaults.standard.set((max(-1000, min(1000, ms)) * 1_000_000).rounded() / 1_000_000, forKey: audioKey(uid))
         NotificationCenter.default.post(name: changed, object: nil)
     }
     static func setVideo(_ uid: String, _ ms: Double) {
@@ -155,7 +155,7 @@ enum Sync {
     @discardableResult
     static func savePreset(name: String, ms: Double, device: String?, deviceName: String?) -> Preset {
         var list = customPresets
-        let p = Preset(id: "custom." + UUID().uuidString.prefix(8).lowercased(), name: name, ms: (ms * 1000).rounded() / 1000,
+        let p = Preset(id: "custom." + UUID().uuidString.prefix(8).lowercased(), name: name, ms: (ms * 1_000_000).rounded() / 1_000_000,
                        device: device, deviceName: deviceName, builtIn: false)
         list.append(p); storeCustom(list); return p
     }

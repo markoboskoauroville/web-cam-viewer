@@ -20,7 +20,7 @@ import AVFoundation
 // v31 (25.11.2026): GAIN per sound input (on the device when it has its own volume, else digital), AUTO GAIN (the Sound
 // Recorder's Gain Assistant, peaks to -12 dBFS), takes with 32-bit float sound (Gain.swift, GainPanel.swift).
 // v22 (21.11.2026): the current Picture Profile / lock key marked by a green border and title, also in an inactive window.
-let VERSION = 36
+let VERSION = 37
 let NAME = "Webcam Recorder (Mantra)"
 let APP_NAME = NAME   // v23: the updater kit (MANTRA_MANIFEST kits/mac-updater) names the app by APP_NAME
 
