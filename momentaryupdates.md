@@ -1,5 +1,9 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v30):** Marko (relayed word for word, his answer on the A/V sync plan): *"We are not going to use paid Apple account for now, so the name states obvious with your camera. Yes."*
+  Read as: no paid Apple Developer account for now (no DriverKit/notarised audio driver; the OBS-sink name stays as it is), and "Yes" = build the sync. His requirement of the same day (word for word in the section "25.11.2026: Mantra VirtualCam ..." below): "It must be exactly in the same frame, the sound. So when I'm doing my online lessons with drumming, there is no shift, and I can use any microphone."
+  Status 25.11.2026: v30 = the SYNC key and a per-input sound delay in every take (phase 1 of docs/AVSYNC_PLAN.md); see TAKEOVER.
+
 **25.11.2026 (v29):** Marko: *"Now there is something broken in my web recorder, and the image is flickering. It's not coming from the shutter speed or light. No. It's stable. It's coming from display. What you have changed in display, it's causing the flickering in the picture. And also, I wanted to change the wording in... there is a list of drop down menu of the resolutions. Please don't write up to 60 FPS or up to 30 FPS. Just write 60 FPS max, 30 FPS max, making less text, please."*
 
 **25.11.2026 (v29):** Marko: *"And also improve my drop down menu for camera and sound. Next to... For example, now, next to UGREEN there is some strange strange square. It looks like you cannot display some kind of font. Simply make there in parenthesis, round ones. V for video, A for audio, and then I will know what is video, what is audio. Clear to see."* (dictated "B" = V)

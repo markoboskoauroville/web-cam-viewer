@@ -7,6 +7,7 @@ import Network
 // Viewer functions the window and the record key call. Port written to ~/.mantra/ports/webcam-recorder.
 //   v23: GET /sounds  POST /sound {"name"|"id"|"none"}  GET /sony/status[?check=1]  POST /sony/check|connect|disconnect|takecontrol
 //   POST /sony/rec {"on"}  GET /sony/prop?code=  POST /sony/set {"code"|"name", "value"|"label"}
+//   v30: GET /sync  POST /sync {"ms"|"delta"|"reset", "uid"|"name"?} | {"audio":{"uid","ms"}} | {"video":{"uid"?,"ms"}} | {"scratch"}
 //   GET /status   GET /cameras   GET /capture   POST /camera {"name"|"id","slice"}   POST /capture {"format"|"rate"|"mode"}   POST /quality {"quality"}   POST /record/start {"name"?}   POST /record/stop   POST /front   POST /fullscreen {"on"}   POST /snap {"on"}
 final class ApiServer {
     static let port: UInt16 = 8867
@@ -101,6 +102,11 @@ final class ApiServer {
             case ("POST", "/front"): v.apiFront(); Self.send(c, 200, ["ok": true])
             // v23: the sound input, and the Sony (status with the staged check, connect, REC, any setting)
             case ("GET", "/sounds"): Self.send(c, 200, ["sounds": v.apiSounds()])
+            // v30: the A/V sync values (Sync.swift): per sound input, the camera's picture delay, the scratch track
+            case ("GET", "/sync"): Self.send(c, 200, v.apiSync())
+            case ("POST", "/sync"):
+                let r = v.apiSetSync(req.body)
+                if r.ok { Self.send(c, 200, v.apiSync()) } else { Self.send(c, 409, ["error": r.error]) }
             case ("POST", "/sound"):
                 let r = v.apiSetSound(name: req.body["name"] as? String, id: req.body["id"] as? String, none: (req.body["none"] as? Bool) ?? false)
                 if r.ok { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Self.send(c, 200, v.apiStatus()) } } else { Self.send(c, 409, ["error": r.error]) }
@@ -136,7 +142,7 @@ final class ApiServer {
                 v.sony.apiSet(key: key, value: (req.body["value"] as? NSNumber)?.uint64Value, label: req.body["label"] as? String) { ok, text in
                     Self.send(c, ok ? 200 : 409, ["ok": ok, "result": text, "status": v.sony.apiStatus()])
                 }
-            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}"]])
+            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /sync", "POST /sync {ms|delta|reset, uid|name?} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}"]])
             }
         }
     }

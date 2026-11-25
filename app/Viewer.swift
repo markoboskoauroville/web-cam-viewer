@@ -38,6 +38,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let qualityKey = NSButton()
     private let snapKey = NSButton()
     private let folderKey = NSButton()
+    // v30: the SYNC key and its box (the chosen sound input's delay against the camera's own sound, Sync.swift)
+    private let syncKey = NSButton()
+    private let syncPanel = SyncPanel()
+    private var syncTop: NSLayoutConstraint!
+    // v30: the camera's own sound (UGREEN 15389 (A)) kept open beside the chosen input: the scratch track of every take,
+    // and its 4 ms start walk (AVSYNC_PLAN §1.1) is over long before a lesson starts
+    private let scratchSession = AVCaptureSession()
+    private let scratchOut = AVCaptureAudioDataOutput()
+    private let scratchQueue = DispatchQueue(label: "webcamviewer.scratch")
+    private var scratchInput: AVCaptureDeviceInput?      // scratch queue
+    private var scratchUID: String?                      // main thread: the input the scratch session holds
+    private var lastScratchFormat: CMFormatDescription?  // capture queue
     // v21: the SONY key and its overlay (our own PTP control of the α7 V over Wi-Fi)
     private let sonyKey = NSButton()
     private let sonyLink = SonyLink()
@@ -126,10 +138,18 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         preview = AVCaptureVideoPreviewLayer(session: session)
         super.init()
         buildWindow()
+        let nc0 = NotificationCenter.default
         videoOut.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
         videoOut.alwaysDiscardsLateVideoFrames = false
         videoOut.setSampleBufferDelegate(self, queue: captureQueue)
         audioOut.setSampleBufferDelegate(self, queue: captureQueue)
+        scratchOut.setSampleBufferDelegate(self, queue: captureQueue)
+        scratchQueue.async {
+            self.scratchSession.beginConfiguration()
+            if self.scratchSession.canAddOutput(self.scratchOut) { self.scratchSession.addOutput(self.scratchOut) }
+            self.scratchSession.commitConfiguration()
+        }
+        nc0.addObserver(self, selector: #selector(syncChanged), name: Sync.changed, object: nil)
         queue.async {
             self.session.beginConfiguration()
             if self.session.canAddOutput(self.videoOut) { self.session.addOutput(self.videoOut) }
@@ -324,7 +344,20 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sonyPanel.onClose = { [weak self] in self?.setSony(false) }
         updateSonyKey()
 
-        let group = NSStackView(views: [popup, micPopup, recKey, qualityKey, feedStats])
+        // v30: SYNC beside the sound menu: "SYNC +72" = the chosen input is held back 72 ms to sit on the camera's frame
+        syncKey.translatesAutoresizingMaskIntoConstraints = false
+        syncKey.isBordered = false
+        syncKey.target = self; syncKey.action = #selector(syncTapped)
+        syncKey.setAccessibilityIdentifier("sync")
+        syncKey.setContentHuggingPriority(.required, for: .horizontal)
+        syncKey.setContentCompressionResistancePriority(.required, for: .horizontal)
+        syncKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        syncPanel.onStep = { [weak self] d in self?.stepSync(d) }
+        syncPanel.onReset = { [weak self] in self?.resetSync() }
+        syncPanel.onClose = { [weak self] in self?.setSync(false) }
+        updateSyncKey()
+
+        let group = NSStackView(views: [popup, micPopup, syncKey, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -427,6 +460,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         NSLayoutConstraint.activate([sonyTop, sonyPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             sonyPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: StereoMeter.width),
             sonyPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
+        syncPanel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(syncPanel, positioned: .below, relativeTo: bar)   // over the Sony overlay, under the bar
+        syncTop = syncPanel.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 6)
+        NSLayoutConstraint.activate([syncTop,
+            syncPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: StereoMeter.width + 10),
+            syncPanel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -(StereoMeter.width + 20)),
+            syncPanel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+            syncPanel.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -8)])
+        let wide = syncPanel.widthAnchor.constraint(equalToConstant: 460); wide.priority = .defaultHigh; wide.isActive = true
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: content.topAnchor), overlay.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             overlay.leadingAnchor.constraint(equalTo: content.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
@@ -439,6 +481,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             guard let self, e.window === self.window else { return e }
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if e.keyCode == 53, !self.syncPanel.isHidden { self.setSync(false); return nil }   // v30: the SYNC box first
             if e.keyCode == 53, !self.sonyPanel.isHidden { self.setSony(false); return nil }   // Escape hides the Sony controls
             if e.keyCode == 53, !self.overlay.isHidden { self.overlay.close(); return nil }   // Escape closes the choice
             if e.keyCode == 53, self.isFull { self.toggleFull(); return nil }   // Escape
@@ -521,6 +564,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         preview.frame = picture.bounds
         sliceLayer.frame = picture.bounds
         CATransaction.commit()
+        updateSyncKey()
     }
 
     func show() {
@@ -619,6 +663,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func toggleFull() { window.toggleFullScreen(nil) }
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
+        if !syncPanel.isHidden { setSync(false) }
         sonyTop.constant = 0
         meterTop.constant = 0   // the meters the whole height
         NSCursor.setHiddenUntilMouseMoves(true)
@@ -636,6 +681,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         statsTimer?.invalidate(); statsTimer = nil
         var r: Recorder?
         captureQueue.sync { r = recorder; recorder = nil }
+        scratchQueue.async { if self.scratchSession.isRunning { self.scratchSession.stopRunning() } }
         let end = { self.queue.async { if self.session.isRunning { self.session.stopRunning() }; DispatchQueue.main.async { done?() } } }
         if let r { r.finish { _ in end() } } else { end() }
     }
@@ -734,6 +780,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
         // the sound: every input, then "No sound"; the first time the Mac's own default input
         mics = Cameras.microphones()
+        for m in mics { Sync.seed(uid: m.uniqueID, name: m.localizedName) }   // v30: measured values for inputs with none yet
         fill(micPopup, mics)
         micPopup.addItem(withTitle: "No sound")
         let noSound = UserDefaults.standard.bool(forKey: "nosound")
@@ -763,6 +810,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 micPopup.selectItem(at: mics.count)
             }
         }
+        updateScratch()
+        updateSyncKey()
     }
 
     /// v7: the chosen camera is not connected: keep its id, show a dark frame with the message, never another camera
@@ -886,6 +935,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if isRecording { stopRecording() }
         currentMic = device
         updateFeedStatsVisibility()
+        updateScratch()
+        updateSyncKey()   // v30: a new sound input brings its own delay
         if let device { UserDefaults.standard.set(device.uniqueID, forKey: "sound"); UserDefaults.standard.set(device.localizedName, forKey: "soundName") }
         meter.dead = device == nil || !micAllowed
         queue.async {
@@ -925,6 +976,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private func updateFeedStats() {
+        updateSyncKey()
         guard current != nil else { return }
         var frames = 0, drops = 0, width = 0, height = 0, format = "—"
         captureQueue.sync {
@@ -1335,6 +1387,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let width = self.sliceOn ? Slicer.outW : (self.capturedWidth > 0 ? self.capturedWidth : 1920)
         let height = self.sliceOn ? Slicer.outH : (self.capturedHeight > 0 ? self.capturedHeight : 1080)
         let quality = self.recordQuality
+        let shift = appliedSync()
+        let soundName = currentMic?.localizedName
+        let scratchWanted = scratchUID != nil
         // v23: a sound input is chosen but its first buffer has not come yet (just launched, just switched): wait for it
         // up to 1.5 s, never start a take that silently has no sound track (v22 did, when lastAudioFormat was still nil)
         func begin(_ tries: Int) {
@@ -1345,7 +1400,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             do {
                 let r = try Recorder(fps: fps, width: width, height: height, quality: quality,
                                      vertical: self.sliceOn, title: title,
-                                     audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat)
+                                     audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat,
+                                     audioShift: shift.audioMs / 1000, audioName: soundName,
+                                     scratchFormat: scratchWanted ? self.lastScratchFormat : nil,
+                                     scratchShift: shift.scratchMs / 1000)
+                if scratchWanted, !r.hasScratchTrack, r.hasAudioTrack { NSLog("Webcam Recorder: this take has no camera scratch track (no buffer from the camera sound yet)") }
                 self.recorder = r
                 let noTrack = self.audioIn != nil && !r.hasAudioTrack
                 DispatchQueue.main.async { self.liveRecorder = r; self.liveWithoutSound = noTrack; self.interrupted = false; self.currentTake = r.url.path; self.recStart = Date(); self.recordingStarted(fps: fps); started?(r.url) }
@@ -1371,6 +1430,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         soundBanner.preferredMaxLayoutWidth = max(100, (window.contentView?.bounds.width ?? 420) - 32)   // its wrapped height
         let top = Self.barHeight + (visible ? ceil(soundBanner.fittingSize.height) + 12 : 0)
         if sonyTop.constant != top { sonyTop.constant = top }
+        if syncTop.constant != top + 6 { syncTop.constant = top + 6 }
     }
 
     /// v23 (silent-failure.md): what is wrong with the take's sound now, nil while the sound is arriving
@@ -1427,6 +1487,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // MARK: samples (capture queue)
 
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
+        if o === scratchOut {
+            lastScratchFormat = CMSampleBufferGetFormatDescription(sb)
+            recorder?.appendScratch(sb)
+            return
+        }
         if o === audioOut {
             lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
             recorder?.appendAudio(sb)
@@ -1672,6 +1737,7 @@ extension Viewer {
                 "sound": nn(UserDefaults.standard.bool(forKey: "nosound") ? nil : currentMic?.localizedName),
                 "soundWarning": nn(soundWarningNow),
                 "takeSoundSeconds": liveRecorder?.audioSecondsWritten ?? 0,
+                "sync": apiSyncStatus(),
                 "sony": sonyLink.apiStatus()]
     }
 
@@ -1743,4 +1809,192 @@ extension Viewer {
     }
     func apiSnap(_ on: Bool) -> Bool { if on != snapper.isSnapped { snapper.toggle() }; return snapper.isSnapped }
     func apiFront() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+}
+
+// MARK: v30, SYNC: every sound input on the picture's frame (Sync.swift, SyncPanel.swift, docs/AVSYNC_PLAN.md)
+extension Viewer {
+    @objc fileprivate func syncTapped() { setSync(syncPanel.isHidden) }
+
+    fileprivate func setSync(_ open: Bool) {
+        syncPanel.isHidden = !open
+        if open {
+            if !overlay.isHidden { overlay.close() }
+            updateSyncPanel()
+        }
+        updateSyncKey()
+    }
+
+    @objc fileprivate func syncChanged() {
+        updateSyncKey()
+        if !syncPanel.isHidden { updateSyncPanel() }
+    }
+
+    /// the chosen sound input and its value (nil = No sound)
+    fileprivate var chosenSync: (uid: String, name: String, ms: Double, reference: Bool)? {
+        guard let m = currentMic, !UserDefaults.standard.bool(forKey: "nosound") else { return nil }
+        let ref = Sync.isReference(uid: m.uniqueID, name: m.localizedName)
+        return (m.uniqueID, m.localizedName, ref ? 0 : Sync.audioDelayMs(uid: m.uniqueID, name: m.localizedName), ref)
+    }
+
+    /// what a take applies: the chosen sound moved by its delay minus the camera's picture delay; the scratch (the camera's
+    /// own sound) by minus the picture delay only
+    func appliedSync() -> (audioMs: Double, videoMs: Double, scratchMs: Double) {
+        let video = (current?.uniqueID ?? wantedID).map { Sync.videoDelayMs($0) } ?? 0
+        return ((chosenSync?.ms ?? 0) - video, video, -video)
+    }
+
+    fileprivate func stepSync(_ d: Double) {
+        guard let c = chosenSync, !c.reference else { return }
+        Sync.setAudio(c.uid, c.ms + d)
+    }
+
+    fileprivate func resetSync() {
+        guard let c = chosenSync, !c.reference else { return }
+        Sync.setAudio(c.uid, Sync.measured(uid: c.uid, name: c.name)?.ms ?? 0)
+    }
+
+    /// "SYNC +72"; only "SYNC" when the bar has no room for the number (after the statistics key has given its room)
+    func updateSyncKey() {
+        let c = chosenSync
+        let number = c.map { $0.reference ? "0" : Sync.short($0.ms) }
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .bold),
+            .foregroundColor: c == nil ? NSColor.secondaryLabelColor : NSColor.white]
+        let full = "SYNC" + (number.map { " " + $0 } ?? "")
+        let fullWidth = ceil(NSAttributedString(string: full, attributes: attrs).size().width) + 10
+        let right = (permissions.isHidden ? sonyKey.frame.minX : permissions.frame.minX) - 10
+        let needed = 10 + 118 + 10 + 118 + 10 + fullWidth + 10 + 30 + 10 + qualityKey.intrinsicContentSize.width
+        let title = (right <= 0 || needed <= right) ? full : "SYNC"
+        let old = syncKey.attributedTitle
+        let oldColor = old.length > 0 ? old.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil
+        if old.string != title || oldColor != attrs[.foregroundColor] as? NSColor {
+            syncKey.attributedTitle = NSAttributedString(string: title, attributes: attrs)
+        }
+        syncKey.setAccessibilityTitle("SYNC")
+        syncKey.setAccessibilityValue(c.map { $0.reference ? "reference, 0 ms" : Sync.text($0.ms) } ?? "no sound input")
+        syncKey.toolTip = c.map { $0.reference
+            ? "SYNC: \($0.name) is the camera's own sound, the reference (0 ms)"
+            : "SYNC: \($0.name) is held back \(Sync.text($0.ms)) so its sound sits on the camera's frame. Click to change." }
+            ?? "SYNC: choose a sound input first"
+    }
+
+    fileprivate func updateSyncPanel() {
+        let c = chosenSync
+        let video = appliedSync().videoMs
+        var detail = "Choose a sound input."
+        var value = "—"
+        if let c {
+            value = c.reference ? "0 ms" : Sync.text(c.ms)
+            if c.reference { detail = "The camera's own sound (HDMI) is the reference: it is on the picture's frame, nothing to move." }
+            else {
+                let m = Sync.measured(uid: c.uid, name: c.name)
+                let how = c.ms >= 0 ? "held back" : "brought earlier"
+                detail = "This input is \(how) \(Sync.text(abs(c.ms))) against the camera's own sound (UGREEN 15389 (A))."
+                    + (m.map { " Measured: \(Sync.text($0.ms)) (\($0.source))." } ?? " Not measured yet: tools/avsync.py measure.")
+            }
+        }
+        var rows: [SyncPanel.Row] = []
+        for m in mics {
+            let ref = Sync.isReference(uid: m.uniqueID, name: m.localizedName)
+            guard ref || Sync.storedAudio(m.uniqueID) != nil else { continue }
+            rows.append(SyncPanel.Row(title: m.localizedName + Self.audioTag,
+                                      value: ref ? "0 ms (reference)" : Sync.text(Sync.audioDelayMs(uid: m.uniqueID, name: m.localizedName)),
+                                      current: m.uniqueID == c?.uid))
+        }
+        var footer = "Picture delay of \(current?.localizedName ?? wantedName ?? "the camera") (V): \(Sync.text(video))."
+        footer += scratchUID != nil ? " The camera's own sound is kept in every take as track 2 (camera scratch)." : ""
+        if isRecording { footer += " A change applies to the next take." }
+        syncPanel.update(SyncPanel.Model(sound: c.map { $0.name + Self.audioTag } ?? "No sound", value: value, detail: detail,
+                                         adjustable: c != nil && c?.reference == false, rows: rows, footer: footer))
+    }
+
+    /// the scratch session holds the camera's own sound while another input is chosen (sync.scratch, default on)
+    func updateScratch() {
+        let enabled = UserDefaults.standard.object(forKey: "sync.scratch") as? Bool ?? true
+        let ref = mics.first { Sync.isReference(uid: $0.uniqueID, name: $0.localizedName) }
+        var want: AVCaptureDevice?
+        if enabled, micAllowed, let ref, let chosen = currentMic, !UserDefaults.standard.bool(forKey: "nosound"),
+           chosen.uniqueID != ref.uniqueID { want = ref }
+        if want?.uniqueID == scratchUID { return }
+        scratchUID = want?.uniqueID
+        scratchQueue.async {
+            self.scratchSession.beginConfiguration()
+            if let i = self.scratchInput { self.scratchSession.removeInput(i); self.scratchInput = nil }
+            if let want, let input = try? AVCaptureDeviceInput(device: want), self.scratchSession.canAddInput(input) {
+                self.scratchSession.addInput(input); self.scratchInput = input
+            }
+            self.scratchSession.commitConfiguration()
+            if self.scratchInput != nil { if !self.scratchSession.isRunning { self.scratchSession.startRunning() } }
+            else if self.scratchSession.isRunning { self.scratchSession.stopRunning() }
+            self.captureQueue.async { self.lastScratchFormat = nil }
+            NSLog("Webcam Recorder: camera scratch sound %@", want?.localizedName ?? "off")
+        }
+    }
+
+    func apiSyncStatus() -> [String: Any] {
+        let a = appliedSync()
+        return ["audioDelayMs": chosenSync?.ms ?? 0, "videoDelayMs": a.videoMs, "appliedMs": a.audioMs,
+                "scratch": scratchUID != nil, "take": nn(liveRecorder?.syncInfo)]
+    }
+
+    /// GET /sync: every value, what a take applies now, the scratch input, the running take's corrections
+    func apiSync() -> [String: Any] {
+        let c = chosenSync, a = appliedSync()
+        let ref = mics.first { Sync.isReference(uid: $0.uniqueID, name: $0.localizedName) }
+        let inputs: [[String: Any]] = mics.map { m in
+            let isRef = Sync.isReference(uid: m.uniqueID, name: m.localizedName)
+            let meas = Sync.measured(uid: m.uniqueID, name: m.localizedName)
+            return ["uid": m.uniqueID, "name": m.localizedName, "reference": isRef, "current": m.uniqueID == c?.uid,
+                    "delayMs": isRef ? 0 : Sync.audioDelayMs(uid: m.uniqueID, name: m.localizedName),
+                    "stored": Sync.storedAudio(m.uniqueID) != nil,
+                    "measuredMs": isRef ? nn(0.0) : nn(meas?.ms), "source": isRef ? nn("reference") : nn(meas?.source),
+                    "key": Sync.audioKey(m.uniqueID)]
+        }
+        let camUID = current?.uniqueID ?? wantedID
+        let sound: [String: Any]? = c.map { ["uid": $0.uid, "name": $0.name, "delayMs": $0.ms, "reference": $0.reference] }
+        let camera: [String: Any] = ["uid": nn(camUID), "name": nn(current?.localizedName ?? wantedName),
+                                     "videoDelayMs": a.videoMs, "key": nn(camUID.map { Sync.videoKey($0) })]
+        return ["reference": ["name": Sync.referenceName, "uid": nn(ref?.uniqueID), "present": ref != nil] as [String: Any],
+                "sound": nn(sound),
+                "camera": camera,
+                "applied": ["audioMs": a.audioMs, "videoMs": a.videoMs, "scratchMs": a.scratchMs] as [String: Any],
+                "inputs": inputs,
+                "scratch": ["enabled": UserDefaults.standard.object(forKey: "sync.scratch") as? Bool ?? true,
+                            "device": nn(scratchUID), "running": scratchUID != nil] as [String: Any],
+                "recording": isRecording, "appliesTo": isRecording ? "the next take" : "every take from now",
+                "take": nn(liveRecorder?.syncInfo)]
+    }
+
+    /// POST /sync: {"ms"|"delta"} for the chosen input, or with "uid"|"name" for another; {"audio":{"uid","ms"}};
+    /// {"video":{"uid"?,"ms"}}; {"reset":true}; {"scratch":true|false}
+    func apiSetSync(_ b: [String: Any]) -> (ok: Bool, error: String) {
+        var body = b
+        if let audio = b["audio"] as? [String: Any] { for (k, v) in audio { body[k] = v } }
+        if let s = b["scratch"] as? Bool {
+            if isRecording { return (false, "not while recording (the take's tracks are fixed)") }
+            UserDefaults.standard.set(s, forKey: "sync.scratch"); updateScratch()
+        }
+        if let video = b["video"] as? [String: Any] {
+            guard let ms = (video["ms"] as? NSNumber)?.doubleValue, ms >= 0 else { return (false, "video ms must be 0 or more") }
+            guard let uid = (video["uid"] as? String) ?? current?.uniqueID ?? wantedID else { return (false, "no camera") }
+            Sync.setVideo(uid, ms)
+        }
+        let hasAudio = body["ms"] != nil || body["delta"] != nil || (body["reset"] as? Bool) == true
+        if hasAudio {
+            var target: AVCaptureDevice?
+            if let uid = body["uid"] as? String { target = mics.first { $0.uniqueID == uid } }
+            else if let name = (body["name"] as? String)?.lowercased(), !name.isEmpty {
+                target = mics.first { $0.localizedName.lowercased() == name } ?? mics.first { $0.localizedName.lowercased().contains(name) }
+            } else { target = chosenSync == nil ? nil : currentMic }
+            guard let t = target else { return (false, "no such sound input (or no sound chosen)") }
+            if Sync.isReference(uid: t.uniqueID, name: t.localizedName) { return (false, "the camera's own sound is the reference (0 ms)") }
+            let now = Sync.audioDelayMs(uid: t.uniqueID, name: t.localizedName)
+            var ms = now
+            if (body["reset"] as? Bool) == true { ms = Sync.measured(uid: t.uniqueID, name: t.localizedName)?.ms ?? 0 }
+            if let v = (body["ms"] as? NSNumber)?.doubleValue { ms = v }
+            if let d = (body["delta"] as? NSNumber)?.doubleValue { ms += d }
+            guard abs(ms) <= 1000 else { return (false, "ms must be within ±1000") }
+            Sync.setAudio(t.uniqueID, ms)
+        }
+        return (true, "")
+    }
 }
