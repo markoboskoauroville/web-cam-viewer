@@ -409,14 +409,23 @@ final class VirtualMic {
         if u > underrunPrev { underrunRecent += u - underrunPrev; lastUnderrunAt = now; grew = true }
         underrunPrev = u
         if now - lastUnderrunAt > 5 { underrunRecent = 0 }
+        let underrunRecentNow = underrunRecent
         os_unfair_lock_lock(lk); let w = shared.pointee.writeIndex; os_unfair_lock_unlock(lk)
         if w != lastWriteIndexSeen { lastWriteIndexSeen = w; lastWriteSeenAt = now }
         lock.unlock()
         // Lapp: the newest sample must have arrived before the IO proc wants it
         let ahead = max(r.aheadMax, r.aheadMaxPrev)
         lappUpdate(ahead: ahead)
+        // v38: silence for more than half a second in the last 5 s while the input flows = the timeline is lost (seen once
+        // on v37 after test readers opened the RØDE and the Mantra VirtualCam mic: the fill swung between +129 and -401 ms
+        // and only a VMIC restart cured it): start a new timeline with the next buffer, as a restart does
+        if underrunRecentNow > Int(VirtualMic.outRate / 2) && now - lastHealAt > 5 {
+            lastHealAt = now; heals += 1; pFresh = true
+            lock.lock(); underrunRecent = 0; lock.unlock()
+            NSLog("Webcam Recorder: VMIC: the sound timeline was lost (%d frames of silence), a new one starts", underrunRecentNow)
+        }
         // v36: the sound still came too late: Lapp grows by 2 ms (at most 200 ms), so the next sample is in time
-        if grew && lappLatest > 0 && lappLatest < 200 {
+        if grew && underrunRecentNow < Int(VirtualMic.outRate / 10) && lappLatest > 0 && lappLatest < 200 {
             lappLatest += 2
             Composite.shared.setLapp(lappLatest, measured: true)
             NSLog("Webcam Recorder: VMIC: underrun, Lapp now %.1f ms", lappLatest)
@@ -426,6 +435,7 @@ final class VirtualMic {
         if changed { DispatchQueue.main.async { self.onChange?() } }
     }
     private var lastState = ""
+    private var lastHealAt = 0.0, heals = 0
     private var lappLatest = 0.0
 
     /// Lapp = p98 of (arrival − first-sample stamp) + how far ahead the IO proc writes + one cycle + 3 ms, rounded up to
@@ -730,7 +740,7 @@ final class VirtualMic {
             "readErrorMs": sh.rateIn > 0 ? (r.lastErrSamples / sh.rateIn * 100_000).rounded() / 100 : 0,
             "drift": ["ppm": vnn(driftPpmLocked), "correctionMs": (sh.driftSec * 100_000).rounded() / 100,
                       "samplesDropped": r.drops, "samplesRepeated": r.repeats] as [String: Any],
-            "jumps": r.jumps,
+            "jumps": r.jumps, "timelineRestarts": heals,
             "underruns": ["frames": r.underrunFrames, "cycles": r.underrunCycles, "recentFrames": underrunRecent] as [String: Any],
             "tooOldFrames": r.tooOldFrames,
             "cycles": r.cycles, "framesOut": r.frames, "waitingCycles": r.waitingCycles,

@@ -1,7 +1,8 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
 **State 25.11.2026: v34 = VMIC (the live sound into the Mantra VirtualCam microphone) + the composite delay; v35 = a
-steady picture path for it; v36 = VMIC never holds the capture queue on Core Audio.** Marko (momentaryupdates.md): "how to
+steady picture path for it; v36 = VMIC never holds the capture queue on Core Audio + SYNC in ms/frames/samples with
+presets; v37 = two SYNC fixes.** Marko 25.11.2026: "Please ignore this rule with Zoom call forever." (no waiting for calls) Marko (momentaryupdates.md): "how to
 get sound which is processed with the same application webcam recorder and then have it in sync ... in live stream".
 - **VMIC key** left of VCAM (AX title VMIC; green "VMIC ●" feeding, orange waiting for sound, red ● problem, the red
   note shared with VCAM's bottom right), remembered `virtualmic.on`. app/VirtualMic.swift: the chosen input (gain, SYNC)
@@ -23,6 +24,16 @@ get sound which is processed with the same application webcam recorder and then 
   but 30 ms spread, LESSONS 64). adam (ADAM chirps): VMIC − raw = 134.7 / 135.8 ms vs 134.9 planned. Drift −2.7…−2.9 ppm.
   IO proc 2 µs mean / 10 µs max; CPU 38-39 % with or without VMIC, coreaudiod +1-2 %. Takes with VMIC on and off pass
   check_take (12 s ×2, 9 s ×3).
+- **v36/v37 SYNC in three units + presets** (Marko: "custom delay for sync ... in frames, milliseconds, and samples ...
+  also custom one for future"): the SYNC box has a VALUE field (Return applies), MS / FRAMES / SAMPLES keys (`sync.unit`),
+  steps of that unit (ms ±0.1/±1, frames ±0.1/±1, samples ±1/±10), the three units side by side (frames at the capture
+  mode's fps, samples at the input's own rate, whole samples when applied), PRESETS (built-in: the measured RØDE +72.5,
+  External Microphone +74.6, MacBook Pro Microphone +44.2, UGREEN reference 0; SAVE AS PRESET for this input or any input,
+  APPLY, RENAME, DELETE, `sync.presets`). Stored value unchanged: `sync.audioDelayMs.<uid>` in ms, now to the nanosecond.
+  API: POST /sync {unit, value, fps?, rate?, uid?} {view} {presetSave:{name, device:"this"|"any", ms?}} {presetApply|
+  presetDelete: id} {presetRename:{id,name}}; GET /sync `units` + `presets`; /status sync.units. Tested by API on v36:
+  72.5 ms = 2.175 frames at 30 = 3480 samples at 48 kHz; 2 frames at 60 = 33.333 ms; presets save/apply/rename/delete,
+  built-ins refuse delete. v37 fixed two findings (fps was the measured 29.x; 100 samples read 99.984).
 - **Open / not verified:** the v36 install and its re-measure (see below); Zoom itself (the clap test, VIRTUALCAM_BUILD §9,
   sets `virtualcam.trimMs`); the RØDE as the input (Marko had External Microphone chosen; not switched); a 30-min drift
   run (the poller hung with the app, LESSONS 65); one take hang on v35 (LESSONS 65: the Recorder's synchronous video pipe
