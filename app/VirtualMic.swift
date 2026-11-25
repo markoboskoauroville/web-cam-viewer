@@ -388,8 +388,11 @@ final class VirtualMic {
         let r = reader.pointee
         let now = Self.now()
         var changed = false
+        // v36: the HAL call outside the lock (submit() on the capture queue takes the same lock; a slow coreaudiod must
+        // never hold the capture queue, LESSONS 65)
+        let drvNow = Self.driverStatus(feedID)
         lock.lock()
-        if let d = Self.driverStatus(feedID) {
+        if let d = drvNow {
             driver = d
             let silent = (d["silentReads"] as? NSNumber)?.intValue ?? 0
             let ov = (d["overloads"] as? NSNumber)?.intValue ?? 0
@@ -401,7 +404,9 @@ final class VirtualMic {
             driverPrev = (silent, ov, gap, now)
         }
         let u = r.underrunFrames
-        if u > underrunPrev { underrunRecent += u - underrunPrev; lastUnderrunAt = now }
+        var grew = false
+        if now - startedAt < 3 { underrunPrev = u }           // v36: the first 3 s of a start do not count
+        if u > underrunPrev { underrunRecent += u - underrunPrev; lastUnderrunAt = now; grew = true }
         underrunPrev = u
         if now - lastUnderrunAt > 5 { underrunRecent = 0 }
         os_unfair_lock_lock(lk); let w = shared.pointee.writeIndex; os_unfair_lock_unlock(lk)
@@ -410,6 +415,12 @@ final class VirtualMic {
         // Lapp: the newest sample must have arrived before the IO proc wants it
         let ahead = max(r.aheadMax, r.aheadMaxPrev)
         lappUpdate(ahead: ahead)
+        // v36: the sound still came too late: Lapp grows by 2 ms (at most 200 ms), so the next sample is in time
+        if grew && lappLatest > 0 && lappLatest < 200 {
+            lappLatest += 2
+            Composite.shared.setLapp(lappLatest, measured: true)
+            NSLog("Webcam Recorder: VMIC: underrun, Lapp now %.1f ms", lappLatest)
+        }
         let st = summary.state
         if st != lastState { lastState = st; changed = true }
         if changed { DispatchQueue.main.async { self.onChange?() } }
