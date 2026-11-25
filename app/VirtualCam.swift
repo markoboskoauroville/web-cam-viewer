@@ -53,6 +53,17 @@ final class VirtualCam {
     private var holdMs = 0.0, requestedMs = 0.0, videoDelayMs = 0.0, trimMs = 0.0, capMs = VirtualCam.defaultCapMs
     var cameraID: String? { get { lock.lock(); defer { lock.unlock() }; return camID } set { lock.lock(); camID = newValue; lock.unlock() } }
     private var camID: String?
+    // v33, 25.11.2026 (Marko in a live Zoom call: how does the sound in Zoom sit on the VCAM picture?): the microphone Zoom
+    // uses, remembered as virtualcam.zoomMic (an audio UID, or "mantra" = the Mantra VirtualCam mic of the v34 audio path).
+    // Its SYNC value (sync.audioDelayMs.<uid>, positive = its sound is EARLIER than the camera's frame) decides:
+    //   negative (the mic is later than the picture): the picture waits -value ms (part of the hold);
+    //   positive (the RØDE: +72.5): the picture cannot be made earlier; the sound must wait, which only the Mantra
+    //   VirtualCam mic can do (audio hold, docs/VIRTUALCAM_BUILD.md §8). The status says how far ahead the sound is.
+    static let zoomMicKey = "virtualcam.zoomMic"
+    struct ZoomMic { var uid: String; var name: String; var syncMs: Double }
+    var zoomMic: ZoomMic? { get { lock.lock(); defer { lock.unlock() }; return zMic } set { lock.lock(); zMic = newValue; lock.unlock() } }
+    private var zMic: ZoomMic?
+    private var micPictureMs = 0.0
     private var received = 0, busyDrops = 0, poolDrops = 0, ringDrops = 0, queueFullDrops = 0, skipped = 0
     private var sentTotal = 0, sentUnique = 0
     private var latencies: [Double] = [], processing: [Double] = [], arrivals: [Double] = [], converts: [Double] = []
@@ -306,13 +317,14 @@ final class VirtualCam {
     private var holdAt = 0.0
     private func refreshHold() {
         let d = UserDefaults.standard
-        lock.lock(); let id = camID; let extra = extraMs; lock.unlock()
+        lock.lock(); let id = camID; let extra = extraMs; let mic = zMic; lock.unlock()
         let video = id.map { Sync.videoDelayMs($0) } ?? 0
         let trim = d.object(forKey: Self.trimKey).flatMap { ($0 as? NSNumber)?.doubleValue } ?? 0
         let cap = Self.storedCap
-        let req = video + trim + extra
+        let fromMic = max(0, -(mic?.syncMs ?? 0))      // only a mic LATER than the camera makes the picture wait
+        let req = video + fromMic + trim + extra
         lock.lock()
-        videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req
+        videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req; micPictureMs = fromMic
         holdMs = min(max(0, req), cap)
         pvMs = Self.median(processing) ?? 0
         lock.unlock()
@@ -443,9 +455,10 @@ final class VirtualCam {
             "processingMs": nn2(Self.median(processing).map(Self.r1)),
             "arrivalMs": nn2(Self.median(arrivals).map(Self.r1)), "convertMs": nn2(Self.median(converts).map(Self.r1)),
             "inputPeriodMs": Self.r1(period * 1000),
-            "delay": ["videoDelayMs": videoDelayMs, "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
+            "zoomMic": zoomMicStatus(),
+            "delay": ["videoDelayMs": videoDelayMs, "zoomMicPictureMs": Self.r1(micPictureMs), "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
                       "appliedMs": Self.r1(holdMs), "maxHoldMs": capMs, "capped": capped,
-                      "formula": "hold = sync.videoDelayMs.<video id> + virtualcam.trimMs + extraDelayMs (audio path, v33); a held frame leaves at capture + Pv + hold"] as [String: Any],
+                      "formula": "hold = sync.videoDelayMs.<video id> + max(0, -sync.audioDelayMs.<zoom mic>) + virtualcam.trimMs + extraDelayMs (audio path); a held frame leaves at capture + Pv + hold"] as [String: Any],
             "delayApplied": Self.r1(holdMs),
             "droppedFrames": busyDrops + poolDrops + ringDrops,
             "drops": ["converterBusy": busyDrops, "poolLimit": poolDrops, "ringOverflow": ringDrops, "sinkQueueFull": queueFullDrops,
@@ -457,6 +470,27 @@ final class VirtualCam {
             "zoom": "In Zoom: Video → Camera → OBS Virtual Camera",
         ]
         if feeding { out["secondsFeeding"] = Int(Self.now() - startedAt) }
+        return out
+    }
+
+    /// the Zoom microphone's place against the VCAM picture (lock held by the caller)
+    private func zoomMicStatus() -> Any {
+        guard let m = zMic else { return NSNull() }
+        let vcamMs = Self.median(latencies) ?? 0
+        let ahead = max(0, max(0, m.syncMs) + vcamMs - holdMs)
+        let text: String
+        if m.uid == "mantra" {
+            text = "Zoom mic Mantra VirtualCam: the app holds the sound to the picture (the audio-path version; until then nothing is written to it)."
+        } else if m.syncMs > 0 {
+            text = String(format: "Zoom mic %@: its sound is %.1f ms ahead of the camera, and VCAM's picture path adds about %.0f ms, so in Zoom the sound comes about %.0f ms before the picture (less Zoom's own mic latency). The picture cannot be made earlier: the sound must wait, which the Mantra VirtualCam microphone will do.", m.name, m.syncMs, vcamMs, ahead)
+        } else if m.syncMs < 0 {
+            text = String(format: "Zoom mic %@: its sound is %.1f ms later than the camera, so the picture is held %.1f ms to match it.", m.name, -m.syncMs, micPictureMs)
+        } else {
+            text = String(format: "Zoom mic %@: the camera's own sound (the reference); VCAM's picture path adds about %.0f ms.", m.name, vcamMs)
+        }
+        var out: [String: Any] = [:]
+        out["uid"] = m.uid; out["name"] = m.name; out["syncMs"] = m.syncMs
+        out["pictureHoldMs"] = Self.r1(micPictureMs); out["soundAheadOfPictureMs"] = Self.r1(ahead); out["text"] = text
         return out
     }
 

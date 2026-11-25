@@ -205,3 +205,39 @@
     1920x1080 · yuvs · 30 or 60. Not the app (no fix in code); the period-4 measure: mean |step| per x mod 4.
     Note: ffmpeg's avfoundation input picks the 420v device format for 2560x1440 and LOCKS the device, which changes the
     app's live format; put it back with POST /capture afterwards. OBS holding the card locks ffmpeg out.
+
+56. **OBS's camera extension counts the FIRST feeder, not the last (v32, 25.11.2026).** Read in its source
+    (plugins/mac-virtualcam/src/camera-extension, OBS 33): `authorizedToStartStream(for:)` only stores the client;
+    `startStream()` (which starts the 180 Hz timer that consumes that client's queue) runs once, when the sink starts.
+    A second feeder while we feed changes nothing (tools/vcam_rival.py: the reader kept our 30 pictures/s). A feeder
+    that was there FIRST keeps the sink: our CMSimpleQueue (capacity 10) is then never read; VCAM sees it full for
+    0.5 s and says so (ownerConflict, red note), and the reader gets no frames at all. After that feeder stops, the
+    extension still reads nobody until VCAM is turned off and on (measured). So "never fight" = never restart by itself;
+    VCAM off/on is his hand. OBS's own Start Virtual Camera behaves like the rival (it is just another client).
+57. **Never hold capture buffers in a delay ring: convert first, hold our own (v32).** The capture queue hands VCAM a
+    retained 420v buffer (at most 2 in flight, else the frame is skipped and counted `converterBusy`); a separate queue
+    fits it into a BGRA 1920x1080 IOSurface from our own pool (allocation threshold = the ring cap), and only those are
+    held. Memory: 8.3 MB per held frame (200 ms at 30 fps = 6 frames, 47.5 MB measured; cap 400 ms = 79 MB at 30 fps).
+    Takes with VCAM on passed check_take exactly as with it off (max lag 0.0 s, 0 capture drops).
+58. **Core Image: 42 composited squares cost ~40 ms a frame.** The test stamp first made 42 CIImage composites per frame:
+    convert went to ~40 ms, 20 % of the frames were skipped and the path showed 115 ms. One 42x1 bitmap scaled 24x with
+    `samplingNearest()` costs nothing measurable (convert 7-9 ms at 2560x1440 → 1920x1080 Lanczos, 2 ms at 720x480).
+59. **Where the video latency is (v32, measured with the stamp read back by tools/vcam_check.py):** capture stamp → our
+    delegate 52-55 ms at 2560x1440 30 (the UGREEN + AVFoundation, before any app code; 15 ms at 720x480 60), our
+    convert 7-9 ms, extension + reader 4-7 ms: a new picture reaches a reader 69-71 ms after its capture stamp (p95 90 ms).
+    The capture stamp is on the host clock (the reader's delivery = arrival − PTS = 2-6 ms), so the audio side can
+    plan against it. A hold is added on top of capture + Pv: +100 → +103.6 ms, +200 → +203.0 ms at the reader, and the
+    spread shrinks (p95 − median 20 ms → 12 ms) because the arrival jitter is taken out.
+60. **The sink stays 60 fps by repeats only in the input's gaps.** A fresh frame goes out at once; a repeat only when 16 ms
+    passed and the next picture is not due within 8 ms (else 30 fps in made 68 buffers/s). Measured at the reader:
+    57-60 buffers/s, 30.0 distinct pictures/s from a 30 fps camera (counted by stamp; a sparse-pixel signature
+    undercounts a still scene: 25/s). CPU of the app: 19 % without VCAM, 32-35 % with it, plus ~5 % in the OBS extension.
+61. **A raw microphone in Zoom cannot be synced by delaying the picture (25.11.2026).** The RØDE is +72.5 ms (its sound
+    is EARLIER than the camera's frame), and the VCAM picture adds ~64 ms of its own path: in Zoom its sound leads the
+    picture by roughly 130 ms less Zoom's mic latency. Delaying the picture "by the mic's SYNC value" would double the
+    error. The picture is held only for a mic that is LATER than the camera (negative value); an early mic needs its
+    sound held, which only the app's own microphone (Mantra VirtualCam, the audio path) can do.
+62. **Do not leave a test state on the live path.** A slice test left VCAM sending the 9:16 picture pillarboxed while
+    Marko joined a Zoom call on it (and a ZZTEST take was running in front of him). Before a test that changes what
+    VCAM sends, check that no one reads OBS Virtual Camera (zoom.us running = assume he is in a call), and put the
+    picture back the moment a test ends.

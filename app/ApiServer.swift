@@ -7,7 +7,7 @@ import Network
 // Viewer functions the window and the record key call. Port written to ~/.mantra/ports/webcam-recorder.
 //   v23: GET /sounds  POST /sound {"name"|"id"|"none"}  GET /sony/status[?check=1]  POST /sony/check|connect|disconnect|takecontrol
 //   POST /sony/rec {"on"}  GET /sony/prop?code=  POST /sony/set {"code"|"name", "value"|"label"}
-//   v32: GET /virtualcam/status  POST /virtualcam {"on"?, "extraDelayMs"?, "maxHoldMs"?, "trimMs"?, "stamp"?}
+//   v32: GET /virtualcam/status  POST /virtualcam {"on"?, "extraDelayMs"?, "maxHoldMs"?, "trimMs"?, "stamp"?}  v33: {"zoomMic": "mantra"|"default"|uid|name}
 //   v31: GET /gain  POST /gain {"db"|"delta"|"reset"|"auto"|"undo"|"stop"|"clear"|"format":"aac"|"f32"|"panel", "uid"?}
 //   v30: GET /sync  POST /sync {"ms"|"delta"|"reset", "uid"|"name"?} | {"audio":{"uid","ms"}} | {"video":{"uid"?,"ms"}} | {"scratch"}
 //   GET /status   GET /cameras   GET /capture   POST /camera {"name"|"id","slice"}   POST /capture {"format"|"rate"|"mode"}   POST /quality {"quality"}   POST /record/start {"name"?}   POST /record/stop   POST /front   POST /fullscreen {"on"}   POST /snap {"on"}

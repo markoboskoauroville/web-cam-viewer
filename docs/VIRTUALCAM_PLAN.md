@@ -193,6 +193,10 @@ change too. Agree the order with them, never two at once.
    (slice pillarboxed into 1920x1080). Check: read "OBS Virtual Camera" with ffmpeg avfoundation, N frames with a deadline,
    then kill (MANTRA_VIRTUAL_CAM LESSONS 3: never an open-ended reader). Compare a frame with the recorder's own. Latency
    = capture PTS vs the PTS that arrives. CPU and the take check (`tools/check_take.py`) while VCAM is on.
+   **Done in v32 (25.11.2026), see TAKEOVER and LESSONS 56-60.** Differences from this plan: the hold is
+   `sync.videoDelayMs + virtualcam.trimMs + extraDelayMs` (extraDelayMs = the audio path's latency, set by the API until
+   v33 fills it), applied on top of capture + Pv; and the extension keeps the FIRST feeder, not the last (LESSONS 56),
+   so "OBS's own Start Virtual Camera fights with us" only bites when OBS started first: VCAM then reports ownerConflict.
 2. **VC-2 = the driver (new public repo `mantra-virtualcam-audio`, GPL-3, README/TAKEOVER/LESSONS).** A fork of
    BlackHole with the constants of section 5. A GitHub workflow: `xcodebuild` Release with `GCC_PREPROCESSOR_DEFINITIONS`,
    `CODE_SIGN_IDENTITY=-`, zip of `Mantra VirtualCam.driver` + `install.sh` / `uninstall.sh`, a release marked Latest.

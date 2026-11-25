@@ -1,5 +1,34 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v32 = VCAM (VC-1 of Mantra VirtualCam), v33 = Zoom mic in the VCAM status + the bar's "2560/30".**
+Marko (momentaryupdates.md): "I want that our app web cam recorder stream through OBS virtual camera with all audio and
+delay processing ... a composite for plugin delays so my students always see me playing in sync."
+- **VCAM key** left of SONY (AX title VCAM; green "VCAM ●" feeding, red ● conflict/problem with a calm red note bottom
+  right, orange = waiting), remembered `virtualcam.on`. app/VirtualCam.swift, from MANTRA_VIRTUAL_CAM VirtualCamera.swift.
+  The picture as chosen (slice = the middle 9:16 strip pillarboxed) into OBS Virtual Camera's sink, 1920x1080 BGRA,
+  Lanczos, black bars, colour-tagged; fresh frames out at once, repeats only in gaps (57-60 buffers/s, 30 pictures/s
+  from 30 fps). Capture queue hands over a retained buffer only (≤ 2 in flight); a separate queue converts; nothing waits.
+- **Hold** = `sync.videoDelayMs.<video id>` + (v33) `max(0, −sync.audioDelayMs.<zoomMic>)` + `virtualcam.trimMs` +
+  `extraDelayMs` (API; the audio path fills it), clamped 0…`virtualcam.maxHoldMs` (400 default, ≤ 1000), on top of
+  capture + Pv; warning when capped. Ring of our own BGRA frames, 8.3 MB each.
+- **API:** `GET /virtualcam/status` (on, feeding, sinkFound, sink, sinkFormat, ownerConflict, obsRunning, problem, fps,
+  sendFps, latencyMs, arrivalMs, convertMs, PvMs, delay{...}, droppedFrames, drops{...}, ringMB, extensionVersion 33.0.2,
+  zoomMic{...} v33); `POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, zoomMic (v33)}`. /status has `vcam`.
+- **Verified on the installed v32 (14:43-15:22, API only):** sink "OBS Camera Extension Stream Sink" 1920x1080 BGRA,
+  queue 10; read back with tools/vcam_check.py: the same picture (PNG checked), slice pillarbox 656-1263 px; capture →
+  reader 69-71 ms median for a new picture (52-55 ms of it before the app: the card), convert 7-9 ms, delivery 4-7 ms;
+  hold +100 → +103.6 ms, +200 → +203.0 ms, 500 asked → 400 held + warning; CPU 19 % → 32-35 % (+~5 % OBS extension);
+  owner conflict proven with tools/vcam_rival.py (LESSONS 56). Takes with VCAM on, check_take pass, 0 capture drops:
+  first after launch 8 s (twice), LOW 12 s, HIGH 60 s (VCAM off and on), slice HIGH 60 s and 240 s at 2560x1440 30
+  (also 60 s and 240 s at 720x480 60, when the card's mode was changed from outside: skill pitfall).
+- **Not done / open:** the kill -9 take with VCAM on (stopped: Marko joined a live Zoom call on VCAM at 15:2x); v33 is
+  built but its install waits for the call to end; a real Zoom check by Marko (picks Camera → OBS Virtual Camera); the
+  sound in Zoom = docs/VIRTUALCAM_BUILD.md §8 (raw RØDE leads the picture ~130 ms; the Mantra VirtualCam mic fixes it).
+- **v33 (25.11.2026):** Marko: "It should just say two five six zero slash frame rate. That's it." The capture key on
+  the bar says WIDTH/FPS ("2560/30"), never clipped (the long form is its AX value and tooltip). Zoom mic: `zoomMic`
+  in the status and the VCAM tooltip (LESSONS 61).
+
+
 **Finding 25.11.2026 (no version): the "rigid coarse pixels" are the card, not the app (LESSONS 55).**
 Marko: "I see some kind of rigid coarse pixels ... i think app has an issue you can compare outputs from my app and obs".
 - Same moment through OBS (lossless) and the app: identical stair-steps; app vs OBS 48.1 dB, app vs raw card 51.2 dB.

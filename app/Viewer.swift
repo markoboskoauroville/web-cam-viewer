@@ -1068,6 +1068,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private func updateFeedStats() {
         updateSyncKey()
         vcam.cameraID = current?.uniqueID ?? wantedID
+        vcam.zoomMic = resolvedZoomMic
         updateVcamKey()
         guard current != nil else { return }
         var frames = 0, drops = 0, width = 0, height = 0, format = "—"
@@ -1093,20 +1094,26 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard !feedStats.isHidden else { return }
         if let w = soundWarningNow {
             // v23: on the bar, in red, in place of the statistics, for as long as the take's sound is missing
+            feedStats.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)   // a long warning may be cut, the banner has it whole
             feedStats.attributedTitle = NSAttributedString(string: "⚠ " + w, attributes: [
                 .font: NSFont.systemFont(ofSize: 11, weight: .bold),
                 .foregroundColor: NSColor(srgbRed: 1, green: 0.231, blue: 0.188, alpha: 1)])
             feedStats.setAccessibilityValue(w)
             return
         }
-        feedStats.setAccessibilityValue(nil)
         let degraded = drops > 0 || (measuredFPS > 0 && measuredFPS + 0.9 < Double(fps))
-        var text = ""
-        if width > 0, height > 0 { text += "\(width)×\(height) · " }
-        text += "\(fps) FPS"
-        if degraded { text += String(format: " / %.1f LIVE", measuredFPS) }
-        text += " · \(format)"
-        if drops > 0 { text += " · \(drops) DROP\(drops == 1 ? "" : "S")" }
+        // v33, Marko 25.11.2026 (only "25" of 2560 was left on the bar): "It should just say two five six zero slash frame
+        // rate. That's it." The key says WIDTH/FPS ("2560/30"), never clipped; the long form is its AX value and tooltip.
+        var long = ""
+        if width > 0, height > 0 { long += "\(width)×\(height) · " }
+        long += "\(fps) FPS"
+        if degraded { long += String(format: " / %.1f LIVE", measuredFPS) }
+        long += " · \(format)"
+        if drops > 0 { long += " · \(drops) DROP\(drops == 1 ? "" : "S")" }
+        let text = (width > 0 ? "\(width)" : "—") + "/\(fps)"
+        feedStats.setAccessibilityValue(long)
+        feedStats.toolTip = "Capture: \(long). Click for the capture device's modes (the cleanest on the UGREEN: 1920×1080 · yuvs · 60)."
+        feedStats.setContentCompressionResistancePriority(.required, for: .horizontal)
         feedStats.attributedTitle = NSAttributedString(string: text, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.9)])
@@ -2374,12 +2381,31 @@ extension Viewer {
         default: value = "off"
         }
         vcamKey.setAccessibilityValue(value)
+        let zm = resolvedZoomMic
+        let micLine: String
+        if let zm {
+            micLine = zm.uid == "mantra" ? " Zoom mic: Mantra VirtualCam (the app holds the sound to the picture)."
+                : zm.syncMs > 0 ? " Zoom mic: \(zm.name), SYNC \(Sync.text(zm.syncMs)): its sound is ahead of the picture; the picture cannot be earlier, the Mantra VirtualCam mic will hold the sound."
+                : zm.syncMs < 0 ? " Zoom mic: \(zm.name): picture delayed \(Sync.text(-zm.syncMs)) to match it."
+                : " Zoom mic: \(zm.name) (the camera's own sound, the reference)."
+        } else { micLine = "" }
         vcamKey.toolTip = "VCAM: the picture as chosen (the 9:16 slice pillarboxed) into the OBS Virtual Camera, 1920x1080 at 60 fps; "
             + "in Zoom pick Camera → OBS Virtual Camera. OBS does not have to run; do not press OBS's own Start Virtual Camera while VCAM is on. "
-            + "Best capture mode for it: 1920x1080 · yuvs · 60. Now: \(value)."
+            + "Best capture mode for it: 1920x1080 · yuvs · 60. Now: \(value)." + micLine
         let text = wanted ? sum.text : nil
         if vcamNote.stringValue != (text ?? "") { vcamNote.stringValue = text ?? "" }
         vcamNote.isHidden = text == nil
+    }
+
+    /// v33: the microphone Zoom uses (virtualcam.zoomMic; default = the sound input chosen here) with its SYNC value
+    var resolvedZoomMic: VirtualCam.ZoomMic? {
+        let stored = UserDefaults.standard.string(forKey: VirtualCam.zoomMicKey)
+        if stored == "mantra" { return VirtualCam.ZoomMic(uid: "mantra", name: "Mantra VirtualCam", syncMs: 0) }
+        let nosound = UserDefaults.standard.bool(forKey: "nosound")
+        guard let uid = stored ?? (nosound ? nil : currentMic?.uniqueID) else { return nil }
+        let name = mics.first { $0.uniqueID == uid }?.localizedName ?? (uid == currentMic?.uniqueID ? currentMic?.localizedName : nil) ?? uid
+        let ms = Sync.isReference(uid: uid, name: name) ? 0 : Sync.audioDelayMs(uid: uid, name: name)
+        return VirtualCam.ZoomMic(uid: uid, name: name, syncMs: ms)
     }
 
     func apiVirtualCam() -> [String: Any] {
@@ -2393,6 +2419,16 @@ extension Viewer {
     /// POST /virtualcam {on?, extraDelayMs?, maxHoldMs?, trimMs?, stamp?}
     func apiSetVirtualCam(_ b: [String: Any], _ done: @escaping (String?) -> Void) {
         if let err = vcam.configure(b) { done(err); return }
+        if let z = b["zoomMic"] as? String {   // "mantra", "default" (= the sound input chosen here), a UID or a name
+            let n = z.lowercased()
+            if n == "default" || n.isEmpty { UserDefaults.standard.removeObject(forKey: VirtualCam.zoomMicKey) }
+            else if n == "mantra" || n.contains("mantra virtualcam") { UserDefaults.standard.set("mantra", forKey: VirtualCam.zoomMicKey) }
+            else if let m = mics.first(where: { $0.uniqueID == z }) ?? mics.first(where: { $0.localizedName.lowercased() == n })
+                        ?? mics.first(where: { $0.localizedName.lowercased().contains(n) }) {
+                UserDefaults.standard.set(m.uniqueID, forKey: VirtualCam.zoomMicKey)
+            } else { done("no such sound input: \(z) (mantra, default, or a name from GET /sounds)"); return }
+            vcam.zoomMic = resolvedZoomMic
+        }
         if let on = b["on"] as? Bool { setVcam(on) { done(nil) } } else { done(nil) }
     }
 }

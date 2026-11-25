@@ -167,3 +167,36 @@ device): download the latest release of MANTRA_VIRTUALCAM_DRIVER, unzip, `./inst
 own admin password into sudo or, with `--dialog`, into the macOS dialog; never in a chat). It verifies the device
 appears. `./uninstall.sh` removes it. `python3 tools/vcam_probe.py` (read only) shows both devices and the status
 property. If coreaudiod refuses the ad-hoc driver: `python3 tools/fallback_aggregate.py create` (route A1).
+
+## 8. The live chain in Zoom: picture and processed sound together (25.11.2026, after the first live call on v32)
+
+Marko, during a live Zoom call on the v32 VCAM: in Zoom he picks OBS Virtual Camera and gets the picture, but how does he
+get the sound, processed by the same app, in perfect sync with that picture, as already solved for recordings?
+
+**What v32/v33 can and cannot do with a raw microphone in Zoom.** The RØDE's SYNC value is +72.5 ms: its sound is 72.5 ms
+EARLIER than the camera's frame (the α7 V delays its HDMI picture). The VCAM picture adds its own path on top (capture
+stamp → enqueue about 64 ms at 2560x1440 30, mostly the card's delivery; LESSONS 59). So with the raw RØDE chosen as
+Zoom's microphone the sound reaches Zoom roughly 72.5 + 64 ms (less Zoom's own mic latency) BEFORE the picture. Holding
+the picture back makes that worse; the picture cannot be made earlier. Only holding the SOUND fixes it, and the app can
+hold sound only in a stream it writes: the Mantra VirtualCam microphone. v33 therefore shows the Zoom mic and how far its
+sound is ahead (`GET /virtualcam/status` → `zoomMic`), and holds the picture only for a mic that is LATER than the camera
+(negative SYNC value): `hold = sync.videoDelayMs + max(0, −sync.audioDelayMs.<zoomMic>) + trim + extraDelayMs`.
+`POST /virtualcam {"zoomMic": "mantra" | "default" | uid | name}` (remembered as `virtualcam.zoomMic`; default = the sound
+input chosen in the app).
+
+**The chain of the audio-path version (driver installed, PatchWork hosted):**
+
+    mic (RØDE)  →  SYNC hold (the mic's own value, as in a take)  →  PatchWork AU (latency Lpw)  →  ring  →
+    driver Feed "Mantra VirtualCam Feed"  →  Zoom microphone "Mantra VirtualCam"
+
+    camera (UGREEN/α7 V)  →  VCAM convert (Pv)  →  video hold  →  OBS sink  →  Zoom camera "OBS Virtual Camera"
+
+Both streams are planned on the host clock from the capture stamps (§5). The sound of a hit captured at host time t is
+written into the Feed for host time t + audioHold + (A − micOffset); the picture of the same hit leaves at
+t_frame + Pv + videoHold. With A = micOffset + Lpw + Lau + Lapp + Ldrv and V = videoOffset + Pv:
+`videoHold = max(0, A − V + trim)`, `audioHold = max(0, V − A − trim)`: the same arithmetic as the take path (where the
+recorder moves the mic by its SYNC value against the picture), plus the plug-in and driver latencies. For the RØDE
+(micOffset −72.5) with PatchWork at 0 latency: the sound waits ≈ 72.5 + Pv ms and the picture 0; with a look-ahead
+limiter of 85 ms in PatchWork the picture waits instead. Zoom's own extra latency is the same for both streams it
+receives as a pair only up to its own pipelines; one clap test in a Zoom local recording measures the rest and sets
+`virtualcam.trimMs` (VC-6). extraDelayMs (v32 API) is where the audio side plugs its A in.
