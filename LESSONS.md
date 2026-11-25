@@ -137,3 +137,16 @@
     opened or closed) re-measures every stage at once (seen: about 4 s after Remote quit and after it reopened), and a
     non-idle verdict older than 60 s is measured again. Remote holding the camera is the normal state: say it calmly
     ("Camera online, controlled by Imaging Edge Remote (USB)"), never as an error.
+42. **Untagged frames flicker on the display (v29, 25.11.2026).** The sliced BGRA frames (Slicer, CIContext with null colour
+    spaces) carried no colour attachments. AVSampleBufferDisplayLayer showed the same frames in two renderings, a gain of
+    exactly x1.123 / x0.890 between window captures (5 of 14 pairs), while the recorded take of the same buffers moved 0.2 %
+    at most. Normal view (AVCaptureVideoPreviewLayer, tagged camera buffers) never did. Every frame we make ourselves gets the
+    source's primaries / transfer / matrix (Rec. 709 default) and its CGColorSpace. Measure flicker motion-robustly: the mode of
+    the per-pixel brightness ratio between consecutive captures (static background wins), never a mean while someone moves.
+43. **A camera's id can change with the USB port (v29).** 0x22000002b895389 became 0x2130002b895389: the location half
+    changed, vendor+product 2b89:5389 (last 8 hex digits) did not. The remembered capture mode is copied over by that tail.
+44. **Menu text: plain letters, never a symbol glyph (v29).** "▯" for the slice read as a broken-font square. Tags are (V) and
+    (A); the vertical picture is "(V) 9:16". Selection is by index and id, so titles can change freely.
+45. **POST /fullscreen moves the window to the first screen (the BenQ).** To give Marko his full screen back on the MacBook,
+    move the window there and press the window's own Full screen key (`macro ax-press ... "Full screen"`). ax-press cannot
+    press a key that pops a menu (AX -25204): open it with a real click at its AX position inside `guard run`.

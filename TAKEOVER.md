@@ -1,5 +1,19 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v29 = no flicker in the vertical slice; (V)/(A) names; "30 FPS max"; capture mode follows a new USB id.**
+Marko (word for word in momentaryupdates.md): the picture flickers "only ... in vertical slice", a strange square next to
+UGREEN, "remove the slice from the name", "60 FPS max, 30 FPS max".
+- **Flicker:** the sliced frames had no colour tags; the window showed them in two renderings (gain x1.123 / x0.890 between
+  captures, 5 of 14 pairs on v28) while the take from the same buffers stayed within 0.2 %. Slicer.tagColour copies the camera's
+  primaries/transfer/matrix (709 default) and the CGColorSpace onto every frame. v29: slice windowed 30 pairs mean 0.95 %
+  (motion only, no x1.12 toggle), normal view 1.35 % (motion), slice full screen on a still scene 19 pairs max 0.2 %.
+  check_take on an 8 s v29 take: pass (Y max step 0.54).
+- **Names:** cameras "UGREEN 15389 (V)" and "UGREEN 15389 (V) 9:16", sounds "UGREEN 15389 (A)", bar "UGREEN (V)" /
+  "UGREEN (A)" (popups 118 pt). Format menu "2560×1440 · 420v · 30 FPS max". Seen in captures of the opened menus.
+- **Capture mode:** a camera with no remembered mode takes the one of the same vendor+product (the id's last 8 hex digits).
+- **Not verified:** the migration path itself on the body (his mode was already saved under the new id before v29 started).
+
+
 **State 25.11.2026: v28 = messages that no longer apply go away by themselves.** Marko: "So I asked you to open Sony Imaging
 Edge remote, and it is opened up. It's already here. It's online, but the message is kind of persistent on the screen."
 - **The stuck text** was the centre label "Opening Sony Imaging Edge Remote…" (Snap.swift): said when S opened Remote, never
