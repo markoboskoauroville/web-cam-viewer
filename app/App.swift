@@ -17,8 +17,10 @@ import AVFoundation
 // v21 (21.11.2026): the SONY key: our own Sony PTP control of the α7 V as an overlay over the picture (Sony*.swift).
 // v30 (25.11.2026): SYNC: every sound input held back by its own measured delay so it sits on the camera's frame; the
 // camera's own sound as a scratch track (Sync.swift, SyncPanel.swift, docs/AVSYNC_PLAN.md).
+// v31 (25.11.2026): GAIN per sound input (on the device when it has its own volume, else digital), AUTO GAIN (the Sound
+// Recorder's Gain Assistant, peaks to -12 dBFS), takes with 32-bit float sound (Gain.swift, GainPanel.swift).
 // v22 (21.11.2026): the current Picture Profile / lock key marked by a green border and title, also in an inactive window.
-let VERSION = 30
+let VERSION = 31
 let NAME = "Webcam Recorder (Mantra)"
 let APP_NAME = NAME   // v23: the updater kit (MANTRA_MANIFEST kits/mac-updater) names the app by APP_NAME
 

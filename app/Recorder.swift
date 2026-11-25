@@ -62,6 +62,7 @@ final class Recorder {
     private var lastFLVDescription: CMFormatDescription?   // encoder thread
     private let createdAt = Date()
     var hasAudioTrack: Bool { audio != nil }
+    private(set) var floatAudio = false          // v31: track 1 is 32-bit float PCM
     var hasScratchTrack: Bool { scratch != nil }
     var audioSecondsWritten: Double { audio?.secondsWritten ?? 0 }
     /// v30: what the sync did in this take (for /status and /sync): the shift applied, drift corrections, stamp jumps
@@ -114,7 +115,8 @@ final class Recorder {
     init(fps: Int32, width: Int, height: Int, quality: RecordQuality,
          vertical: Bool, title: String? = nil, audioFormat description: CMFormatDescription?,
          audioShift: Double = 0, audioName: String? = nil,
-         scratchFormat: CMFormatDescription? = nil, scratchShift: Double = 0) throws {
+         scratchFormat: CMFormatDescription? = nil, scratchShift: Double = 0,
+         floatAudio: Bool = false, gainNote: String? = nil) throws {
         self.fps = fps
         self.quality = quality
         self.width = width
@@ -134,6 +136,11 @@ final class Recorder {
         let main = try description.map { try AudioTrack(description: $0, shift: audioShift, label: "audioWriter") }
         // the scratch track only beside a chosen sound; a scratch input in a format we cannot write is left out, never the take
         let extra = main == nil ? nil : scratchFormat.flatMap { try? AudioTrack(description: $0, shift: scratchShift, label: "scratchWriter") }
+        // v31: the chosen input carries the GAIN (Gain.swift): the digital part on every buffer; an AAC take holds the samples
+        // at full scale (a guard, never a compressor), a 32-bit float take keeps every sample, above 0 dBFS too
+        main?.gainOn = true
+        main?.guardFullScale = !floatAudio
+        self.floatAudio = floatAudio && main != nil
         audio = main
         scratch = extra
         process = Process()
@@ -160,9 +167,14 @@ final class Recorder {
         args += [
             "-c:v", "copy",
         ]
-        if main != nil { args += ["-c:a", "aac", "-b:a:0", "256k", "-disposition:a:0", "default"] }
+        if main != nil {
+            // v31: 32-bit float PCM (pcm_f32le, Matroska A_PCM/FLOAT/IEEE) when chosen, else AAC 256k as before
+            args += floatAudio ? ["-c:a:0", "pcm_f32le"] : ["-c:a:0", "aac", "-b:a:0", "256k"]
+            args += ["-disposition:a:0", "default"]
+        }
         if let audioName, main != nil { args += ["-metadata:s:a:0", "title=\(audioName)"] }
-        if extra != nil { args += ["-b:a:1", "128k", "-disposition:a:1", "0", "-metadata:s:a:1", "title=camera scratch"] }
+        if let gainNote, main != nil { args += ["-metadata:s:a:0", "gain=\(gainNote)"] }
+        if extra != nil { args += ["-c:a:1", "aac", "-b:a:1", "128k", "-disposition:a:1", "0", "-metadata:s:a:1", "title=camera scratch"] }
         args += [
             "-disposition:v:0", "default",
             "-metadata", "timecode=\(startTimecode)",
@@ -411,6 +423,8 @@ final class AudioTrack {
     private var pending = 0                      // samples still to repeat (+) or drop (-)
     private var lastCheck = 0.0                  // seconds of sound written at the last drift check
     private var farInARow = 0
+    var gainOn = false                           // v31: the chosen input: Gain.digitalLinear on every buffer
+    var guardFullScale = true                    // v31: false in a 32-bit float take (nothing is held at 0 dBFS)
     var secondsWritten: Double { Double(samplesWritten) / rate }
     var smoothedErrorMs: Double { smoothed / rate * 1000 }
 
@@ -466,7 +480,8 @@ final class AudioTrack {
 
     /// capture queue: one buffer of this input
     func append(_ sb: CMSampleBuffer, v0: CMTime?) {
-        guard CMSampleBufferDataIsReady(sb), let pcm = pcm(sb) else { return }
+        guard CMSampleBufferDataIsReady(sb), var pcm = pcm(sb) else { return }
+        if gainOn { Gain.apply(&pcm, format: format, g: Gain.digitalLinear, guardFullScale: guardFullScale) }
         lastArrival = Date()
         if pcm.contains(where: { $0 != 0 }) { lastAudible = lastArrival }
         let pts = CMSampleBufferGetPresentationTimeStamp(sb)

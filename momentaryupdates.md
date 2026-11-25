@@ -1,5 +1,9 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v31):** Marko: *"Please, I have issue. I'm trying now to record with my Rode microphone, and the gain is too much. We are talking about the web recorder plug, software. And I don't have any way to adjust a gain. I just need simple gain thing. So we make it like this, where I select the audio devices on second click on any audio device. So first click is selection. Second click is opening dialogue for setting up, and it has the same code. You have the code already in my sound recorder. Just to press auto gain and then it adjust the gain level. It's not compressor, it's just like in my Mixer CQ 10 (CQ-12T). Listening and adjusting the gain. Or you can also add small gear next to the audio to open this auto gain thing."*
+
+**25.11.2026 (v31, the same request):** Marko: *"MIDI [Audio MIDI Setup] says it has 32 bit float resolution. Is that possible that it record 32 bit? Can we enable also 32 bit recording in our web recorder app so there is no need for gain at all? Is that possible?"* (the RØDE NT1 5th Gen)
+
 **25.11.2026 (v30):** Marko (relayed word for word, his answer on the A/V sync plan): *"We are not going to use paid Apple account for now, so the name states obvious with your camera. Yes."*
   Read as: no paid Apple Developer account for now (no DriverKit/notarised audio driver; the OBS-sink name stays as it is), and "Yes" = build the sync. His requirement of the same day (word for word in the section "25.11.2026: Mantra VirtualCam ..." below): "It must be exactly in the same frame, the sound. So when I'm doing my online lessons with drumming, there is no shift, and I can use any microphone."
   Status 25.11.2026: v30 = the SYNC key and a per-input sound delay in every take (phase 1 of docs/AVSYNC_PLAN.md); see TAKEOVER.

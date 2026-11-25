@@ -42,6 +42,17 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let syncKey = NSButton()
     private let syncPanel = SyncPanel()
     private var syncTop: NSLayoutConstraint!
+    // v31: the GAIN gear beside the sound menu and its box (Gain.swift, GainPanel.swift); a second click on the chosen sound
+    // input opens it too
+    private let gainKey = NSButton()
+    private let gainPanel = GainPanel()
+    private var gainTop: NSLayoutConstraint!
+    fileprivate let autoGain = AutoGain()
+    fileprivate var hwGain: HardwareGain?                // the chosen input's own volume, when it has one in dB
+    fileprivate var gainTimer: Timer?
+    fileprivate var gPeak = -120.0, gRms = -120.0, gHold = -120.0, gHoldAt = Date.distantPast
+    fileprivate var gRawPeak = -120.0, gOverRaw = 0  // the input before the digital gain (a float input may pass 0 dBFS)
+    fileprivate var gClipUntil = Date.distantPast, gClips = 0
     // v30: the camera's own sound (UGREEN 15389 (A)) kept open beside the chosen input: the scratch track of every take,
     // and its 4 ms start walk (AVSYNC_PLAN §1.1) is over long before a lesson starts
     private let scratchSession = AVCaptureSession()
@@ -357,7 +368,33 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         syncPanel.onClose = { [weak self] in self?.setSync(false) }
         updateSyncKey()
 
-        let group = NSStackView(views: [popup, micPopup, syncKey, recKey, qualityKey, feedStats])
+        // v31: GAIN, a small gear beside the sound menu (AX title GAIN): the chosen input's gain, AUTO GAIN, the take's format
+        gainKey.translatesAutoresizingMaskIntoConstraints = false
+        gainKey.isBordered = false
+        gainKey.imagePosition = .imageOnly
+        gainKey.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "GAIN")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
+        gainKey.contentTintColor = .white
+        gainKey.target = self; gainKey.action = #selector(gainTapped)
+        gainKey.setAccessibilityIdentifier("gain")
+        gainKey.setAccessibilityTitle("GAIN")
+        gainKey.setContentHuggingPriority(.required, for: .horizontal)
+        gainKey.setContentCompressionResistancePriority(.required, for: .horizontal)
+        gainKey.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        gainKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        gainPanel.onSet = { [weak self] db in self?.setGain(db) }
+        gainPanel.onStep = { [weak self] d in guard let self else { return }; self.setGain(self.currentGainDB + d) }
+        gainPanel.onAuto = { [weak self] in self?.toggleAutoGain() }
+        gainPanel.onUndo = { [weak self] in self?.undoAutoGain() }
+        gainPanel.onReset = { [weak self] in self?.setGain(0) }
+        gainPanel.onFormat = { [weak self] f in self?.setFloatTakes(f) }
+        gainPanel.onClose = { [weak self] in self?.setGainPanel(false) }
+        autoGain.get = { [weak self] in self?.currentGainDB ?? 0 }
+        autoGain.lo = { [weak self] in self?.gainMin ?? Gain.minDB }
+        autoGain.set = { [weak self] db in self?.setGain(db, fromAuto: true) }
+        updateGainKey()
+
+        let group = NSStackView(views: [popup, micPopup, gainKey, syncKey, recKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -469,6 +506,15 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             syncPanel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
             syncPanel.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -8)])
         let wide = syncPanel.widthAnchor.constraint(equalToConstant: 460); wide.priority = .defaultHigh; wide.isActive = true
+        gainPanel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(gainPanel, positioned: .below, relativeTo: bar)   // the SYNC box's place: one of them at a time
+        gainTop = gainPanel.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 6)
+        NSLayoutConstraint.activate([gainTop,
+            gainPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: StereoMeter.width + 10),
+            gainPanel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -(StereoMeter.width + 20)),
+            gainPanel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+            gainPanel.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -8)])
+        let gwide = gainPanel.widthAnchor.constraint(equalToConstant: 460); gwide.priority = .defaultHigh; gwide.isActive = true
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: content.topAnchor), overlay.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             overlay.leadingAnchor.constraint(equalTo: content.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
@@ -481,6 +527,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             guard let self, e.window === self.window else { return e }
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if e.keyCode == 53, !self.gainPanel.isHidden { self.setGainPanel(false); return nil }   // v31: the GAIN box
             if e.keyCode == 53, !self.syncPanel.isHidden { self.setSync(false); return nil }   // v30: the SYNC box first
             if e.keyCode == 53, !self.sonyPanel.isHidden { self.setSony(false); return nil }   // Escape hides the Sony controls
             if e.keyCode == 53, !self.overlay.isHidden { self.overlay.close(); return nil }   // Escape closes the choice
@@ -664,6 +711,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     @objc private func enteredFull() {
         overlays.forEach { $0.isHidden = true }
         if !syncPanel.isHidden { setSync(false) }
+        if !gainPanel.isHidden { setGainPanel(false) }
         sonyTop.constant = 0
         meterTop.constant = 0   // the meters the whole height
         NSCursor.setHiddenUntilMouseMoves(true)
@@ -834,6 +882,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     @objc private func pickedMic() {
         let i = micPopup.indexOfSelectedItem
+        // v31 (Marko: "first click is selection. Second click is opening dialogue"): choosing the input that is already the
+        // chosen one again opens its GAIN box instead of opening the input again (which also stopped a running take)
+        if i >= 0, i < mics.count, let c = currentMic, mics[i].uniqueID == c.uniqueID,
+           !UserDefaults.standard.bool(forKey: "nosound") {
+            setGainPanel(true)
+            return
+        }
         chooseMic(i >= 0 && i < mics.count ? i : nil)
     }
 
@@ -937,6 +992,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         updateFeedStatsVisibility()
         updateScratch()
         updateSyncKey()   // v30: a new sound input brings its own delay
+        applyGainForInput()   // v31: and its own gain
         if let device { UserDefaults.standard.set(device.uniqueID, forKey: "sound"); UserDefaults.standard.set(device.localizedName, forKey: "soundName") }
         meter.dead = device == nil || !micAllowed
         queue.async {
@@ -1390,6 +1446,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let shift = appliedSync()
         let soundName = currentMic?.localizedName
         let scratchWanted = scratchUID != nil
+        let floatTakes = Gain.floatTakes
+        let gainNote = currentMic == nil ? nil : gainDescription
+        if autoGain.running { autoGain.cancel() }   // the auto gain never runs while he records
         // v23: a sound input is chosen but its first buffer has not come yet (just launched, just switched): wait for it
         // up to 1.5 s, never start a take that silently has no sound track (v22 did, when lastAudioFormat was still nil)
         func begin(_ tries: Int) {
@@ -1403,7 +1462,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                                      audioFormat: self.audioIn == nil ? nil : self.lastAudioFormat,
                                      audioShift: shift.audioMs / 1000, audioName: soundName,
                                      scratchFormat: scratchWanted ? self.lastScratchFormat : nil,
-                                     scratchShift: shift.scratchMs / 1000)
+                                     scratchShift: shift.scratchMs / 1000,
+                                     floatAudio: floatTakes, gainNote: gainNote)
                 if scratchWanted, !r.hasScratchTrack, r.hasAudioTrack { NSLog("Webcam Recorder: this take has no camera scratch track (no buffer from the camera sound yet)") }
                 self.recorder = r
                 let noTrack = self.audioIn != nil && !r.hasAudioTrack
@@ -1431,6 +1491,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let top = Self.barHeight + (visible ? ceil(soundBanner.fittingSize.height) + 12 : 0)
         if sonyTop.constant != top { sonyTop.constant = top }
         if syncTop.constant != top + 6 { syncTop.constant = top + 6 }
+        if gainTop.constant != top + 6 { gainTop.constant = top + 6 }
     }
 
     /// v23 (silent-failure.md): what is wrong with the take's sound now, nil while the sound is arriving
@@ -1495,8 +1556,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if o === audioOut {
             lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
             recorder?.appendAudio(sb)
-            let rms = Meter.rms(sb)
-            DispatchQueue.main.async { self.lastLevels = rms; self.meter.setLevels(rms) }
+            // v31: the levels after the digital gain (what the take gets), with the raw peak and the clip flag
+            let lv = Gain.levels(sb, g: Gain.digitalLinear)
+            DispatchQueue.main.async { self.lastLevels = lv.rms; self.meter.setLevels(lv.rms); self.gainFeed(lv) }
         } else {
             liveFrames &+= 1
             recordMissingFrames(at: CMSampleBufferGetPresentationTimeStamp(sb))
@@ -1738,6 +1800,7 @@ extension Viewer {
                 "soundWarning": nn(soundWarningNow),
                 "takeSoundSeconds": liveRecorder?.audioSecondsWritten ?? 0,
                 "sync": apiSyncStatus(),
+                "gain": apiGainStatus(),
                 "sony": sonyLink.apiStatus()]
     }
 
@@ -1819,6 +1882,7 @@ extension Viewer {
         syncPanel.isHidden = !open
         if open {
             if !overlay.isHidden { overlay.close() }
+            if !gainPanel.isHidden { setGainPanel(false) }
             updateSyncPanel()
         }
         updateSyncKey()
@@ -1862,7 +1926,7 @@ extension Viewer {
         let full = "SYNC" + (number.map { " " + $0 } ?? "")
         let fullWidth = ceil(NSAttributedString(string: full, attributes: attrs).size().width) + 10
         let right = (permissions.isHidden ? sonyKey.frame.minX : permissions.frame.minX) - 10
-        let needed = 10 + 118 + 10 + 118 + 10 + fullWidth + 10 + 30 + 10 + qualityKey.intrinsicContentSize.width
+        let needed = 10 + 118 + 10 + 118 + 10 + 26 + 10 + fullWidth + 10 + 30 + 10 + qualityKey.intrinsicContentSize.width
         let title = (right <= 0 || needed <= right) ? full : "SYNC"
         let old = syncKey.attributedTitle
         let oldColor = old.length > 0 ? old.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil
@@ -1994,6 +2058,240 @@ extension Viewer {
             if let d = (body["delta"] as? NSNumber)?.doubleValue { ms += d }
             guard abs(ms) <= 1000 else { return (false, "ms must be within ±1000") }
             Sync.setAudio(t.uniqueID, ms)
+        }
+        return (true, "")
+    }
+}
+
+// MARK: v31, GAIN: one gain per sound input, AUTO GAIN, the take's audio format (Gain.swift, GainPanel.swift)
+extension Viewer {
+    @objc fileprivate func gainTapped() { setGainPanel(gainPanel.isHidden) }
+
+    fileprivate func setGainPanel(_ open: Bool) {
+        gainPanel.isHidden = !open
+        gainTimer?.invalidate(); gainTimer = nil
+        if open {
+            if !overlay.isHidden { overlay.close() }
+            if !syncPanel.isHidden { setSync(false) }
+            updateGainPanel()
+            gainTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in self?.updateGainPanel() }
+        }
+        updateGainKey()
+    }
+
+    /// the chosen input (nil = No sound)
+    fileprivate var gainInput: AVCaptureDevice? {
+        UserDefaults.standard.bool(forKey: "nosound") ? nil : currentMic
+    }
+
+    /// G of the chosen input, read back: the device's own volume (0 = its top) plus the digital part
+    var currentGainDB: Double {
+        guard gainInput != nil else { return 0 }
+        if let hw = hwGain, let db = hw.db { return (((db - hw.range.1) + Gain.digitalDB) * 10).rounded() / 10 }
+        return Gain.digitalDB
+    }
+
+    /// the bottom of the gain for the chosen input: -36 dB, lower when its own volume reaches lower
+    var gainMin: Double { hwGain.map { min(Gain.minDB, $0.range.0 - $0.range.1) } ?? Gain.minDB }
+
+    fileprivate var appliedBy: String {
+        guard hwGain != nil else { return "digital" }
+        return Gain.digitalDB == 0 ? "hardware" : "hardware+digital"
+    }
+
+    /// "−6.0 dB (hardware 54.0 dB of 0…60)" for the take's track tag and the API
+    var gainDescription: String {
+        var t = Gain.text(currentGainDB) + " (" + appliedBy
+        if let hw = hwGain, let db = hw.db { t += String(format: " %.1f dB of %.0f…%.0f", db, hw.range.0, hw.range.1) }
+        if hwGain != nil, Gain.digitalDB != 0 { t += ", digital " + Gain.text(Gain.digitalDB) }
+        return t + ")"
+    }
+
+    /// a new input (or launch): its device volume found, its stored gain applied; with no stored value nothing on the
+    /// device is touched (G is read from it), the digital part is 0
+    func applyGainForInput() {
+        autoGain.cancel(); autoGain.forgetUndo(); autoGain.say(nil)
+        gHold = -120; gClips = 0; gOverRaw = 0; gRawPeak = -120; gClipUntil = .distantPast
+        hwGain = gainInput.flatMap { HardwareGain.find(uid: $0.uniqueID) }
+        if let m = gainInput, let g = Gain.stored(m.uniqueID) { applyGain(g) } else { Gain.setDigital(0) }
+        if let m = gainInput {
+            NSLog("Webcam Recorder: gain of %@: %@, %@", m.localizedName,
+                  hwGain.map { String(format: "its own volume %.1f…%.1f dB", $0.range.0, $0.range.1) } ?? "no volume of its own (digital)",
+                  gainDescription)
+        }
+        updateGainKey()
+        if !gainPanel.isHidden { updateGainPanel() }
+    }
+
+    private func applyGain(_ g: Double) {
+        if let hw = hwGain {
+            let s = hw.split(g)
+            if let now = hw.db, abs(now - s.hw) < 0.05 {} else { hw.set(s.hw) }
+            Gain.setDigital(s.digital)
+        } else { Gain.setDigital(g) }
+    }
+
+    func setGain(_ db: Double, fromAuto: Bool = false) {
+        guard let m = gainInput else { return }
+        let g = Gain.clamp(db, lo: gainMin)
+        UserDefaults.standard.set(g, forKey: Gain.key(m.uniqueID))
+        applyGain(g)
+        updateGainKey()
+        if !gainPanel.isHidden { updateGainPanel() }
+        NotificationCenter.default.post(name: Gain.changed, object: nil)
+    }
+
+    func toggleAutoGain() {
+        if autoGain.running { autoGain.cancel(); updateGainPanel(); return }
+        guard gainInput != nil else { return }
+        if isRecording { autoGain.say("AUTO GAIN: not while recording (stop the take first)"); updateGainPanel(); return }
+        gHold = -120
+        autoGain.begin()
+        updateGainPanel()
+    }
+
+    func undoAutoGain() {
+        guard let b = autoGain.before, !autoGain.running else { return }
+        setGain(b)
+        autoGain.forgetUndo()
+        autoGain.say("AUTO GAIN undone: back to " + Gain.text(currentGainDB))
+        updateGainPanel()
+    }
+
+    func setFloatTakes(_ on: Bool) {
+        guard !isRecording else { return }
+        Gain.floatTakes = on
+        updateGainPanel()
+    }
+
+    /// main thread, every buffer of the chosen input
+    fileprivate func gainFeed(_ lv: Gain.Levels) {
+        let now = Date()
+        gPeak = Gain.dbfs(lv.peak)
+        gRms = Gain.dbfs(lv.rms.max() ?? 0)
+        gRawPeak = Gain.dbfs(lv.rawPeak)
+        gOverRaw += lv.overRaw
+        if gPeak >= gHold || now.timeIntervalSince(gHoldAt) > 2 { gHold = gPeak; gHoldAt = now }
+        if lv.clipped { gClips += 1; gClipUntil = now.addingTimeInterval(2) }
+        let was = autoGain.step
+        autoGain.feed(gPeak)
+        if was != autoGain.step, !gainPanel.isHidden { updateGainPanel() }
+    }
+
+    /// the gear: white, amber while the gain is not 0 dB, red while CLIP shows
+    func updateGainKey() {
+        let g = currentGainDB
+        let clip = Date() < gClipUntil
+        gainKey.contentTintColor = gainInput == nil ? .secondaryLabelColor
+            : clip ? NSColor(srgbRed: 1, green: 0.231, blue: 0.188, alpha: 1)
+            : g != 0 ? NSColor(srgbRed: 1, green: 0.78, blue: 0.30, alpha: 1) : .white
+        gainKey.setAccessibilityTitle("GAIN")
+        gainKey.setAccessibilityValue(gainInput == nil ? "no sound input" : gainDescription)
+        gainKey.toolTip = gainInput.map { "GAIN of \($0.localizedName): \(gainDescription). Click (or choose the same input again) for the gain, AUTO GAIN and the take's audio format." }
+            ?? "GAIN: choose a sound input first"
+    }
+
+    fileprivate func updateGainPanel() {
+        let m = gainInput
+        let g = currentGainDB
+        var detail = "Choose a sound input."
+        if let m {
+            if let hw = hwGain, let db = hw.db {
+                detail = String(format: "On the %@ itself: its input gain %.1f dB (range %.0f…%.0f dB), like the CQ's gain knob. 0 dB here = its top.", m.localizedName, db, hw.range.0, hw.range.1)
+                if Gain.digitalDB != 0 { detail += " Plus " + Gain.text(Gain.digitalDB) + " digital." }
+            } else {
+                detail = "Digital, in the app: the take and the meter (this input has no gain of its own)."
+            }
+        }
+        var note = autoGain.note ?? ""
+        if let left = autoGain.secondsLeft {
+            note = autoGain.step == .measuring
+                ? String(format: "AUTO GAIN: listening… %.0f s · play or speak at your normal loudest level", left.rounded(.up))
+                : String(format: "AUTO GAIN: play or speak at your normal loudest level (waiting for sound, %.0f s)", left.rounded(.up))
+        }
+        var footer = "A pure gain: no compressor, no limiter. "
+        footer += Gain.floatTakes
+            ? "Takes: 32-bit float PCM, nothing clips (about 0.7 GB per hour mono, 1.4 GB stereo)."
+            : "Takes: AAC, the peaks held at 0 dBFS."
+        if gRawPeak > 0 || gOverRaw > 0 { footer += String(format: " The input itself went to %+.1f dBFS (%d samples above 0 dBFS).", gRawPeak, gOverRaw) }
+        if isRecording { footer += " The gain applies at once; the format to the next take." }
+        gainPanel.update(GainPanel.Model(sound: m.map { $0.localizedName + Self.audioTag } ?? "No sound", db: g, minDB: gainMin, detail: detail,
+                                         adjustable: m != nil, autoRunning: autoGain.running, canUndo: autoGain.before != nil,
+                                         note: note, floatTakes: Gain.floatTakes, formatEnabled: !isRecording, footer: footer))
+        gainPanel.showLevels(peak: gPeak, rms: gRms, hold: gHold, clip: Date() < gClipUntil, clips: gClips)
+        updateGainKey()
+    }
+
+    func apiGainStatus() -> [String: Any] {
+        let m = gainInput
+        var d: [String: Any] = ["dB": currentGainDB, "appliedBy": m == nil ? "none" : appliedBy, "digitalDB": Gain.digitalDB,
+                                "peakDB": (gPeak * 10).rounded() / 10, "rmsDB": (gRms * 10).rounded() / 10,
+                                "holdDB": (gHold * 10).rounded() / 10, "rawPeakDB": (gRawPeak * 10).rounded() / 10,
+                                "overFullScaleSamples": gOverRaw, "clip": Date() < gClipUntil, "clipCount": gClips,
+                                "format": Gain.floatTakes ? "f32" : "aac", "panel": !gainPanel.isHidden,
+                                "auto": ["state": autoGain.step.rawValue, "note": nn(autoGain.note), "secondsLeft": nn(autoGain.secondsLeft),
+                                         "undo": nn(autoGain.before), "target": AutoGain.target] as [String: Any]]
+        d["uid"] = nn(m?.uniqueID); d["name"] = nn(m?.localizedName); d["key"] = nn(m.map { Gain.key($0.uniqueID) })
+        d["stored"] = nn(m.flatMap { Gain.stored($0.uniqueID) })
+        if let hw = hwGain { d["hardware"] = ["db": nn(hw.db), "min": hw.range.0, "max": hw.range.1] as [String: Any] } else { d["hardware"] = NSNull() }
+        d["description"] = m == nil ? NSNull() : gainDescription
+        return d
+    }
+
+    /// GET /gain: the chosen input's block and every input's stored value and own volume
+    func apiGain() -> [String: Any] {
+        var d = apiGainStatus()
+        d["inputs"] = mics.map { m -> [String: Any] in
+            let hw = HardwareGain.find(uid: m.uniqueID)
+            return ["uid": m.uniqueID, "name": m.localizedName, "key": Gain.key(m.uniqueID), "stored": nn(Gain.stored(m.uniqueID)),
+                    "current": m.uniqueID == gainInput?.uniqueID,
+                    "hardware": nn(hw.map { ["db": nn($0.db), "min": $0.range.0, "max": $0.range.1] as [String: Any] })]
+        }
+        d["range"] = [gainMin, Gain.maxDB]
+        d["recording"] = isRecording
+        return d
+    }
+
+    /// POST /gain {db|delta|reset|auto|undo|stop|clear|format:"aac"|"f32"|panel, uid?}
+    func apiSetGain(_ b: [String: Any]) -> (ok: Bool, error: String) {
+        if let f = b["format"] as? String {
+            guard f == "aac" || f == "f32" else { return (false, "format is aac or f32") }
+            if isRecording { return (false, "not while recording (the take's format is fixed)") }
+            setFloatTakes(f == "f32")
+        }
+        if let p = b["panel"] as? Bool { setGainPanel(p) }
+        if (b["clear"] as? Bool) == true { gClips = 0; gOverRaw = 0; gHold = -120; gClipUntil = .distantPast }
+        let wantsValue = b["db"] != nil || b["delta"] != nil || (b["reset"] as? Bool) == true
+        if let uid = b["uid"] as? String, uid != gainInput?.uniqueID {
+            guard mics.contains(where: { $0.uniqueID == uid }) else { return (false, "no such sound input") }
+            guard wantsValue else { return (false, "for another input only db, delta or reset (stored, used when it is chosen)") }
+            var g = Gain.stored(uid) ?? 0
+            if (b["reset"] as? Bool) == true { g = 0 }
+            if let v = (b["db"] as? NSNumber)?.doubleValue { g = v }
+            if let v = (b["delta"] as? NSNumber)?.doubleValue { g += v }
+            let lo = HardwareGain.find(uid: uid).map { min(Gain.minDB, $0.range.0 - $0.range.1) } ?? Gain.minDB
+            UserDefaults.standard.set(Gain.clamp(g, lo: lo), forKey: Gain.key(uid))
+            return (true, "")
+        }
+        if wantsValue || b["auto"] != nil || b["undo"] != nil || b["stop"] != nil {
+            guard gainInput != nil else { return (false, "no sound input chosen") }
+        }
+        if wantsValue {
+            if autoGain.running { return (false, "AUTO GAIN is running") }
+            var g = currentGainDB
+            if (b["reset"] as? Bool) == true { g = 0 }
+            if let v = (b["db"] as? NSNumber)?.doubleValue { g = v }
+            if let v = (b["delta"] as? NSNumber)?.doubleValue { g += v }
+            setGain(g)
+        }
+        if (b["stop"] as? Bool) == true, autoGain.running { autoGain.cancel() }
+        if (b["undo"] as? Bool) == true {
+            guard autoGain.before != nil else { return (false, "nothing to undo") }
+            undoAutoGain()
+        }
+        if (b["auto"] as? Bool) == true {
+            if isRecording { return (false, "not while recording") }
+            if !autoGain.running { toggleAutoGain() }
         }
         return (true, "")
     }
