@@ -72,6 +72,7 @@ final class VirtualCam {
     private var paths: [Double] = []      // v34: capture stamp → enqueue minus the hold that frame had (Vpath of the composite)
     private var latencies: [Double] = [], processing: [Double] = [], arrivals: [Double] = [], converts: [Double] = []
     private var lastFreshAt = 0.0, lastFreshPTS = 0.0, period = 1.0 / 30
+    private var steadyMs = 0.0            // v35: the steady picture path (mantra), 0 = off
     private var pvMs = 0.0                // Pv: our own path (capture stamp → frame ready), median, refreshed with the hold
     private var fpsUnique = 0.0, fpsSend = 0.0, fpsAt = 0.0, fpsU0 = 0, fpsS0 = 0
     private var stalledSince: Double?
@@ -219,7 +220,7 @@ final class VirtualCam {
         lock.unlock()
         refreshHold()
         let t = DispatchSource.makeTimerSource(flags: .strict, queue: sendQueue)
-        t.schedule(deadline: .now(), repeating: .nanoseconds(8_333_333), leeway: .microseconds(500))   // 120 Hz checks, 60 fps sends
+        t.schedule(deadline: .now(), repeating: .nanoseconds(2_000_000), leeway: .microseconds(250))   // v35: 500 Hz checks (a held frame leaves within 2 ms of its time), 60 fps sends
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume(); timer = t
         NSLog("Webcam Recorder: VCAM feeding %@ (%@, queue %ld)", Self.obsName, fmtText, queueCapacity)
@@ -299,10 +300,10 @@ final class VirtualCam {
         let ready = Self.now()
         lock.lock()
         ring.append(Frame(pb: out, pts: t, ready: ready))
-        processing.append((ready - t) * 1000); if processing.count > 120 { processing.removeFirst(processing.count - 120) }
+        processing.append((ready - t) * 1000); if processing.count > 300 { processing.removeFirst(processing.count - 300) }
         converts.append((ready - arrived) * 1000); if converts.count > 120 { converts.removeFirst(converts.count - 120) }
         while ring.count > cap { ring.removeFirst(); ringDrops += 1 }
-        let immediate = holdMs <= 0
+        let immediate = holdMs <= 0 && steadyMs <= 0
         lock.unlock()
         if immediate { sendQueue.async { self.tick() } }   // no hold: out at once, not at the next check
     }
@@ -346,6 +347,12 @@ final class VirtualCam {
         videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req; micPictureMs = mantra ? 0 : fromMic
         holdMs = min(max(0, req), cap)
         pvMs = Self.median(processing) ?? 0
+        // v35: the steady path (mantra only): p95 of capture → frame ready + 2 ms, moved only when it changes by 3 ms (or
+        // grows), so the composite's V stays put
+        if mantra && processing.count >= 60 {
+            let s = processing.sorted(); let p95 = s[min(s.count - 1, Int(Double(s.count) * 0.95))] + 2
+            if steadyMs <= 0 || p95 > steadyMs + 1 || p95 < steadyMs - 3 { steadyMs = (p95 * 2).rounded(.up) / 2 }
+        } else if !mantra { steadyMs = 0 }
         lock.unlock()
         holdAt = Self.now()
     }
@@ -357,7 +364,11 @@ final class VirtualCam {
         lock.lock()
         // with a hold, a frame leaves at capture + Pv + hold (VIRTUALCAM_BUILD §5): the hold is added on top of our own path,
         // on the capture clock, so the picture's latency is steady (the arrival jitter of the card is taken out)
-        let hold = holdMs > 0 ? (holdMs + pvMs) / 1000 : 0
+        // v35: with Zoom's mic = Mantra VirtualCam every frame leaves at capture + steady + hold (steady = p95 of our path):
+        // the card delivers pictures 45-80 ms after their stamps, the sound is planned to the sample, so the picture must
+        // be steady too (LESSONS 64)
+        let base = steadyMs > 0 ? steadyMs : pvMs
+        let hold = (holdMs > 0 || steadyMs > 0) ? (holdMs + base) / 1000 : 0
         var pick: Int?
         for (i, f) in ring.enumerated() where f.pts + hold <= now { pick = i }
         var fresh: Frame?
@@ -371,6 +382,8 @@ final class VirtualCam {
         let sinceFresh = now - lastFreshAt
         let repeatDue = now - lastSendAt >= 0.016 && (now + 0.008 < lastFreshAt + period || sinceFresh > period * 1.5)
         let send = fresh ?? (repeatDue ? lastSent : nil)
+        // the buffer's time: a fresh held frame carries its planned moment (exact, whatever the timer's jitter), else now
+        let stampTime = (fresh != nil && hold > 0) ? min(now, fresh!.pts + hold) : now
         lock.unlock()
         guard let f = send else { return }
         if format == nil || !CMVideoFormatDescriptionMatchesImageBuffer(format!, imageBuffer: f.pb) {
@@ -379,7 +392,7 @@ final class VirtualCam {
         }
         guard let fd = format else { return }
         var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(Self.cadence)),
-                                        presentationTimeStamp: CMTime(seconds: now, preferredTimescale: 1_000_000_000),
+                                        presentationTimeStamp: CMTime(seconds: stampTime, preferredTimescale: 1_000_000_000),
                                         decodeTimeStamp: .invalid)
         var sb: CMSampleBuffer?
         CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: f.pb, formatDescription: fd, sampleTiming: &timing, sampleBufferOut: &sb)
@@ -489,7 +502,7 @@ final class VirtualCam {
             "ringFrames": ring.count, "ringMB": Self.r1(Double(ring.count * outW * outH * 4) / 1_048_576),
             "stamp": stampOn, "flash": flashOn, "flashes": flashes,
             "VpathMs": nn2(Self.median(paths).map(Self.r1)),
-            "videoHoldMs": Self.r1(holdMs),
+            "videoHoldMs": Self.r1(holdMs), "steadyPathMs": Self.r1(steadyMs),
             "composite": Composite.shared.status(),
             "extensionVersion": nn2(extensionInfo?.version), "extensionState": nn2(extensionInfo?.state),
             "recommendedCapture": "1920x1080 · yuvs · 60 (the UGREEN's cleanest mode, LESSONS 55; the sink is 1920x1080 at 60)",

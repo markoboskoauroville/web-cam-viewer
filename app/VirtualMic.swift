@@ -43,7 +43,7 @@ final class Composite {
     private var vpathMs = Composite.storedV, vSource = UserDefaults.standard.object(forKey: Composite.lastVKey) == nil ? "default" : "last measured"
     private var mantra = true                     // Zoom's microphone is Mantra VirtualCam (v34 default)
     private var bypass = false                    // test only (POST /virtualmic {"composite": false}): both holds 0
-    // outputs (applied with a 1 ms hysteresis, so measurement noise never moves the sound)
+    // outputs (applied with a 2 ms hysteresis (v35; 1 ms in v34), so measurement noise never moves the sound)
     private var vHold = 0.0, aHold = 0.0, writeDelay = 30.0, aMs = 0.0, vMs = 0.0, applied = false
     private var changes = 0
     private var lastSave = 0.0
@@ -65,7 +65,8 @@ final class Composite {
     func setMantra(_ on: Bool) { lock.lock(); let was = mantra; mantra = on; lock.unlock(); recompute(force: was != on) }
     /// VCAM's measured path (capture stamp → enqueue, without the hold), 4 times a second while it feeds
     func setVideoPath(_ ms: Double) {
-        lock.lock(); vpathMs = ms; vSource = "VCAM measured"
+        // v35: smoothed (time constant about 5 s at 4 updates a second); the first measurement is taken as it is
+        lock.lock(); vpathMs = vSource == "VCAM measured" ? vpathMs + (ms - vpathMs) * 0.05 : ms; vSource = "VCAM measured"
         let save = VirtualMic.now() - lastSave > 30; if save { lastSave = VirtualMic.now() }
         lock.unlock()
         if save { UserDefaults.standard.set((ms * 10).rounded() / 10, forKey: Self.lastVKey) }
@@ -88,7 +89,7 @@ final class Composite {
         let ah = bypass ? 0 : min(Self.maxAudioHoldMs, max(0, V - A - trimMs))
         let wd = lappMs + processorMs + ah
         aMs = A; vMs = V
-        if !applied || force || abs(wd - writeDelay) > 1.0 || abs(vh - vHold) > 1.0 || (vh > 0) != (vHold > 0) {
+        if !applied || force || abs(wd - writeDelay) > 2.0 || abs(vh - vHold) > 2.0 || (vh > 0) != (vHold > 0) {
             if applied { changes += 1 }
             vHold = vh; aHold = ah; writeDelay = wd; applied = true
         }
@@ -158,6 +159,7 @@ final class VirtualMic {
         var lastFillSec = 0.0, lastErrSamples = 0.0, lastHostSec = 0.0, frames = 0
         var waitingCycles = 0
         var flashes = 0
+        var boxN = 1
     }
 
     private let ring: UnsafeMutablePointer<Float>
@@ -579,6 +581,7 @@ final class VirtualMic {
         if ahead > r.pointee.aheadMax { r.pointee.aheadMax = ahead }
         let rateIn = sh.rateIn
         let step = rateIn / Self.outRate
+        r.pointee.boxN = step >= 1.5 ? Int(step.rounded()) : 1
         let c0 = H - sh.delaySec                                   // the true capture time of this cycle's first frame
         let T = Double(sh.anchorIndex) + (c0 - sh.anchorTime - sh.driftSec) * rateIn
         let err = r.pointee.pos - T
@@ -641,6 +644,14 @@ final class VirtualMic {
         let f = Float(p - fl)
         if i < oldest { old += 1; return 0 }
         if i >= avail || (f > 0 && i + 1 >= avail) { under += 1; return 0 }
+        // v35: an input faster than the Feed (96 kHz → 48 kHz) is averaged over the samples one output frame spans
+        // (a box low-pass against aliasing); slower inputs (44.1 kHz) are interpolated
+        let boxN = reader.pointee.boxN
+        if boxN > 1, i + Int64(boxN) <= avail {
+            var sum: Float = 0
+            for j in 0..<boxN { sum += ring[Int((i + Int64(j)) & Self.mask)] }
+            return sum / Float(boxN)
+        }
         let a = ring[Int(i & Self.mask)]
         return f > 0 ? a * (1 - f) + ring[Int((i + 1) & Self.mask)] * f : a
     }

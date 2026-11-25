@@ -60,6 +60,9 @@ def host_now():
     return t.value / t.timescale
 
 
+_CLASSES = None
+
+
 # ------------------------------------------------------------------ the reader (one session per device, host clock)
 class Reader:
     def __init__(self, video=True, audio_names=(MIC,)):
@@ -67,8 +70,16 @@ class Reader:
         from Foundation import NSObject
         from libdispatch import dispatch_queue_create
         self.CM = CM
-        outer = self
+        global _CLASSES
+        if _CLASSES:
+            VGrab, AGrab = _CLASSES
+        else:
+            VGrab, AGrab = self._classes(objc, CM, Quartz, NSObject)
+            _CLASSES = (VGrab, AGrab)
+        self._build(AV, Quartz, dispatch_queue_create, VGrab, AGrab, video, audio_names)
 
+    @staticmethod
+    def _classes(objc, CM, Quartz, NSObject):
         class VGrab(NSObject):
             def init(self):
                 self = objc.super(VGrab, self).init()
@@ -114,6 +125,9 @@ class Reader:
                     self.fmt = CM.CMAudioFormatDescriptionGetStreamBasicDescription(CM.CMSampleBufferGetFormatDescription(sb))
                 self.chunks.append((pts.value / pts.timescale, CM.CMSampleBufferGetNumSamples(sb), bytes(data)))
 
+        return VGrab, AGrab
+
+    def _build(self, AV, Quartz, dispatch_queue_create, VGrab, AGrab, video, audio_names):
         self.sessions, self._keep, self.agrabs = [], [], {}
         self.vgrab = None
         if video:
@@ -225,7 +239,8 @@ def pair(flashes, clicks):
         d = (pts - lateness) - cs
         if abs(d) < 0.45:
             res.append({"second": int(k) % 100000, "offsetMs": round(d * 1000, 2),
-                        "offsetArrivalMs": round(((arr - lateness) - cs) * 1000, 2), "frameLateMs": round(lateness * 1000, 2)})
+                        "offsetArrivalMs": round(((arr - lateness) - cs) * 1000, 2), "frameLateMs": round(lateness * 1000, 2),
+                        "picturePathMs": round((pts - stamp) * 1000, 2), "soundAfterSecondMs": round((cs - k) * 1000, 2)})
     return res
 
 
