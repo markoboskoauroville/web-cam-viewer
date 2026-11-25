@@ -21,8 +21,8 @@ delay processing ... a composite for plugin delays so my students always see me 
   owner conflict proven with tools/vcam_rival.py (LESSONS 56). Takes with VCAM on, check_take pass, 0 capture drops:
   first after launch 8 s (twice), LOW 12 s, HIGH 60 s (VCAM off and on), slice HIGH 60 s and 240 s at 2560x1440 30
   (also 60 s and 240 s at 720x480 60, when the card's mode was changed from outside: skill pitfall).
-- **Not done / open:** the kill -9 take with VCAM on (stopped: Marko joined a live Zoom call on VCAM at 15:2x); v33 is
-  built but its install waits for the call to end; a real Zoom check by Marko (picks Camera → OBS Virtual Camera); the
+- **Not done / open:** the kill -9 take with VCAM on (stopped: Marko joined a live Zoom call on VCAM at 15:2x); v33 was
+  installed at 15:3x with his go-ahead (version 33 confirmed, signed Mantra Apps, 2560x1440 30 kept, VCAM feeding again); a real Zoom check by Marko (picks Camera → OBS Virtual Camera); the
   sound in Zoom = docs/VIRTUALCAM_BUILD.md §8 (raw RØDE leads the picture ~130 ms; the Mantra VirtualCam mic fixes it).
 - **v33 (25.11.2026):** Marko: "It should just say two five six zero slash frame rate. That's it." The capture key on
   the bar says WIDTH/FPS ("2560/30"), never clipped (the long form is its AX value and tooltip). Zoom mic: `zoomMic`
