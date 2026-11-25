@@ -26,7 +26,9 @@ delay processing ... a composite for plugin delays so my students always see me 
   sound in Zoom = docs/VIRTUALCAM_BUILD.md §8 (raw RØDE leads the picture ~130 ms; the Mantra VirtualCam mic fixes it).
 - **v33 (25.11.2026):** Marko: "It should just say two five six zero slash frame rate. That's it." The capture key on
   the bar says WIDTH/FPS ("2560/30"), never clipped (the long form is its AX value and tooltip). Zoom mic: `zoomMic`
-  in the status and the VCAM tooltip (LESSONS 61).
+  in the status and the VCAM tooltip (LESSONS 61). Marko: "I don't see anywhere a version number in my UI please put it
+  somewhere maybe half transparent in lower right corner": "v33" bottom right, 11 pt, white at 45 %, shadow, clicks pass
+  through, AX title Version.
 
 
 **Finding 25.11.2026 (no version): the "rigid coarse pixels" are the card, not the app (LESSONS 55).**

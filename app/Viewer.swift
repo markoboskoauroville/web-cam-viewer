@@ -66,6 +66,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // v32: VCAM, the picture into the OBS Virtual Camera (VirtualCam.swift, docs/VIRTUALCAM_PLAN.md VC-1)
     private let vcamKey = NSButton()
     private let vcamNote = NSTextField(wrappingLabelWithString: "")
+    // v33, Marko 25.11.2026: "I don't see anywhere a version number in my UI please put it somewhere maybe half transparent
+    // in lower right corner." Small, alpha 0.45, a slight shadow, clicks pass through, over every overlay.
+    private let versionLabel = PassThroughLabel(labelWithString: "v\(VERSION)")
     let vcam = VirtualCam()
     private let sonyLink = SonyLink()
     private lazy var sonyPanel = SonyPanel(link: sonyLink)
@@ -616,6 +619,19 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         meterTop.isActive = true
         content.addSubview(soundBanner)   // after the Sony overlay, so it stays visible over it
         content.addSubview(vcamNote)
+        versionLabel.translatesAutoresizingMaskIntoConstraints = false
+        versionLabel.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        versionLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+        let verShadow = NSShadow(); verShadow.shadowColor = NSColor.black.withAlphaComponent(0.8); verShadow.shadowBlurRadius = 2; verShadow.shadowOffset = .zero
+        versionLabel.shadow = verShadow
+        versionLabel.isSelectable = false
+        versionLabel.setAccessibilityTitle("Version")
+        versionLabel.setAccessibilityValue("\(VERSION)")
+        versionLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        content.addSubview(versionLabel, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            versionLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            versionLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6)])
         NSLayoutConstraint.activate([
             vcamNote.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -56),
             vcamNote.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
@@ -1716,6 +1732,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 }
 
 // The camera and sound menus show at most eight characters of the chosen name.
+/// v33: a label that never takes a click (the version in the corner): clicks reach the picture under it
+final class PassThroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class ShortPopUpCell: NSPopUpButtonCell {
     override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
         let text = title.string
