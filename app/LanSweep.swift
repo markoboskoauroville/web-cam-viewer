@@ -174,8 +174,7 @@ enum Net {
     static func title(for iface: String) -> String {
         if let t = Sh.run("/usr/sbin/networksetup", ["-listallhardwareports"]) {
             var port = ""
-            for line in t.split(separator: "
-") {
+            for line in t.split(separator: "\n") {
                 if line.hasPrefix("Hardware Port:") { port = line.dropFirst("Hardware Port:".count).trimmingCharacters(in: .whitespaces) }
                 if line.hasPrefix("Device:"), line.dropFirst("Device:".count).trimmingCharacters(in: .whitespaces) == iface, !port.isEmpty {
                     return "\(port) (\(iface))"
