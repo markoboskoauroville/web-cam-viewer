@@ -2,7 +2,7 @@
 
 Until v1 called Web Cam Viewer (Mantra). A macOS app in Swift: the picture of any camera the Mac sees (FaceTime, USB
 webcams and capture cards, the iPhone, OBS / NDI / Iriun virtual cameras), sound from any input, and one key that records.
-Page: **https://mantrawebcamrecorder.pages.dev** (download, donation bowl), card 21 in the Kod tab of markobosko.pages.dev.
+Page: **https://webcamrecorder.markobosko.org** (download, donation bowl), card 21 in the Kod tab of markobosko.org.
 
 - **The picture** fills the whole window, never cropped. Over its top edge a half see-through bar: camera menu · sound
   menu · ● record, in the top middle; the full-screen key (four corners) and ✕ at the top right.

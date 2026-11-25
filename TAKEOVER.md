@@ -152,7 +152,7 @@ Escape, the page on the domain, the Cloudflare secrets in the repository and the
 mb_2026-11-01_06-42-05.mov was hevc hvc1 1920×1080 30/1 at 9.6 Mb/s, aac 48 kHz mono, tmcd 06:42:05:06 = the wall clock
 of its first frame; sound mean −50.7 dB, peak −27.3 dB (the External Microphone in a quiet room). The test take was
 deleted afterwards. Window screenshot: both menus and ● centred, corners key and ✕ right, the meter moving. Release v2
-(0.6 MB DMG) → Site action success → https://mantrawebcamrecorder.pages.dev answers, the DMG 200, "↓ 0 downloads" shows;
+(0.6 MB DMG) → Site action success → https://webcamrecorder.markobosko.org answers, the DMG 200, "↓ 0 downloads" shows;
 card 21 / SNIMANJE in the bio's Kod tab, HR and EN.
 
 **v3 (1.11.2026):** two VU hairlines, L and R, side by side on the left edge (per-channel RMS, interleaved or not); the
