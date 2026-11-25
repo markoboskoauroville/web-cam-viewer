@@ -242,9 +242,12 @@ final class SonyScan {
                 if ip == skipPTP { ptp = "connected from this app now"; ok = true }
                 else { (ptp, ok, name) = Self.ptpProbe(ip) }
                 lock.lock()
-                byIP[ip]?.ping = pong; byIP[ip]?.ptp = ptp; byIP[ip]?.ptpVerified = ok
-                if let name, !name.isEmpty { byIP[ip]?.model = byIP[ip]?.model ?? name }
-                if ok { byIP[ip]?.how.append("PTP/IP") }
+                if var c = byIP[ip] {
+                    c.ping = pong; c.ptp = ptp; c.ptpVerified = ok
+                    if let name, !name.isEmpty, c.model == nil { c.model = name }
+                    if ok { c.how.append("PTP/IP") }
+                    byIP[ip] = c
+                }
                 lock.unlock()
                 group.leave()
             }
