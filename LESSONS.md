@@ -192,3 +192,16 @@
     digital gain and unclamped, so a clipped float input is seen as it is (the Sound Recorder could not see above 0).
 54. **A second click on an NSPopUpButton item is just its action with the same item.** Choosing the already chosen sound
     input called selectMic again, which also STOPPED a running take (v30 and before). v31 opens the GAIN box instead.
+55. **The UGREEN 15389's 2560x1440 is 1920x1080 stretched by the card, and its 420v modes are compressed (25.11.2026).**
+    Marko saw "rigid coarse pixels" in a 2560x1440 HIGH take (89 Mbps). Measured with the same moment through three roads:
+    OBS 33 (mac-avcapture, YUY2 2560x1440, x264 CRF 0 4:4:4) has EVERY row 4k+1 identical to row 4k (100 %, mean step
+    0.000) and columns 4k+1 nearly so (mean step 0.82 vs 3.1): 1080 lines and 1920 columns repeated to 1440/2560, so
+    every diagonal edge gets a step every third pixel. The 1440 frame is rebuilt from its own 1920x1080 subset at
+    50.3 dB. The app's take of the same moment matches OBS at 48.1 dB luma PSNR and ffmpeg's raw card frames at 51.2 dB
+    (the encoder at QP 19-21 adds nothing visible; the same raw frames through h264_videotoolbox CBR 86 Mbps: 53.7 dB).
+    The card's 420v device formats (1080 and 1440) carry 8x8 block edges (boundary step 1.8-1.9x the others) and half
+    the fine detail (mean gradient 1.0-1.1 vs 2.2-2.3): its internal compressed road. 1920x1080 YUY2 (yuvs) at 30 or 60
+    has no periodic structure at all (period-4/8 strength 0.06-0.12 vs 0.7-0.9 at 1440). Best mode on this card:
+    1920x1080 · yuvs · 30 or 60. Not the app (no fix in code); the period-4 measure: mean |step| per x mod 4.
+    Note: ffmpeg's avfoundation input picks the 420v device format for 2560x1440 and LOCKS the device, which changes the
+    app's live format; put it back with POST /capture afterwards. OBS holding the card locks ffmpeg out.

@@ -1,5 +1,14 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (VC-2, the Mantra VirtualCam audio driver):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline by taking the source code from a BlackHole virtual audio device I have here or use BlackHole as such. During that, you need a composite for plugin delays so my students always see me playing in sync."*
+  Decisions already made: the camera is shown as "OBS Virtual Camera" (no paid Apple account); the microphone is named "Mantra VirtualCam". VC-2 = the driver, its own public repo, built only on GitHub Actions (docs/VIRTUALCAM_BUILD.md).
+
+**25.11.2026 (picture quality):** Marko: *"/Volumes/EXT_1TB/WEBRECORDING/mb_2026-11-25_13-47-58.mkv Also, I have issue with recorded files. If you look at the video, this is the link. It's the highest bit rate and the highest resolution, and I see pixels. I see some kind of rigid coarse pixels. What is the cause of it?"*
+  Then: *"hdmi resolution is 2160 so that is not an issues"*
+  Then: *"i think app has an issue you can compare outputs from my app and obs and see the difference"*
+  Status 25.11.2026: compared with OBS at the same moment: the same pixels in both; the cause is the UGREEN card's
+  2560x1440 mode (1080 stretched, every third line repeated). Best mode 1920x1080 yuvs 30/60 (LESSONS 55, TAKEOVER).
+
 **25.11.2026 (v31):** Marko: *"Please, I have issue. I'm trying now to record with my Rode microphone, and the gain is too much. We are talking about the web recorder plug, software. And I don't have any way to adjust a gain. I just need simple gain thing. So we make it like this, where I select the audio devices on second click on any audio device. So first click is selection. Second click is opening dialogue for setting up, and it has the same code. You have the code already in my sound recorder. Just to press auto gain and then it adjust the gain level. It's not compressor, it's just like in my Mixer CQ 10 (CQ-12T). Listening and adjusting the gain. Or you can also add small gear next to the audio to open this auto gain thing."*
 
 **25.11.2026 (v31, the same request):** Marko: *"MIDI [Audio MIDI Setup] says it has 32 bit float resolution. Is that possible that it record 32 bit? Can we enable also 32 bit recording in our web recorder app so there is no need for gain at all? Is that possible?"* (the RØDE NT1 5th Gen)

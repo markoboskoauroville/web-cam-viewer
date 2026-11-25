@@ -1,5 +1,16 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**Finding 25.11.2026 (no version): the "rigid coarse pixels" are the card, not the app (LESSONS 55).**
+Marko: "I see some kind of rigid coarse pixels ... i think app has an issue you can compare outputs from my app and obs".
+- Same moment through OBS (lossless) and the app: identical stair-steps; app vs OBS 48.1 dB, app vs raw card 51.2 dB.
+- The UGREEN 15389 (MS2130) makes 2560x1440 by repeating every third line (100 % exact in OBS) and nearly every third
+  column of a 1920x1080 picture. Its 420v formats are compressed inside the card (8x8 blocks, half the detail).
+- Best mode on this card: 1920x1080 · yuvs · 30 or 60 (tested in the app: clean, no pattern). His mode stays 2560x1440 30
+  until he chooses. Next steps that need his hand: the a7 V's HDMI output at 1080p (the camera's own downscale instead of
+  the card's), or a card with real 4K/1440 YUY2 or P010 (e.g. Elgato Cam Link 4K, Magewell USB Capture HDMI 4K Plus).
+- Not done: the camera's HDMI 1080p setting (needs his menu), a card that really does 1440p/4K.
+
+
 **State 25.11.2026: v31 = GAIN per sound input, AUTO GAIN, 32-bit float takes.**
 Marko (momentaryupdates.md): "the gain is too much ... I just need simple gain thing ... Second click is opening dialogue
 ... Just to press auto gain ... It's not compressor, it's just like in my Mixer CQ" and "Can we enable also 32 bit recording".
