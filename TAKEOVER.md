@@ -1,5 +1,35 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v31 = GAIN per sound input, AUTO GAIN, 32-bit float takes.**
+Marko (momentaryupdates.md): "the gain is too much ... I just need simple gain thing ... Second click is opening dialogue
+... Just to press auto gain ... It's not compressor, it's just like in my Mixer CQ" and "Can we enable also 32 bit recording".
+- **GAIN box** (gear beside the sound menu, AX title GAIN; or choose the already chosen sound input again in its menu = the
+  second click): value in dB, slider + -1/+1 (0.5 dB steps), meter (RMS bar, peak line, 2 s peak hold, CLIP lamp held 2 s,
+  "peak / RMS / hold dBFS · clips"), AUTO GAIN, UNDO, RESET (0 dB), TAKE AUDIO: AAC | 32-BIT FLOAT, CLOSE, Escape. Same look
+  and place as SYNC; one of the two open at a time. The gear turns amber when the gain is not 0 dB, red while CLIP shows.
+- **Where the gain is applied:** `gain.dB.<audioUID>` (G, 0 = the device's top, -36…+24, lower when the device reaches
+  lower). A device with its own Core Audio input volume in dB (the RØDE NT1 5th Gen: 0…60 dB, settable) is moved on the
+  device; what it cannot give is digital (Gain.setDigital → AudioTrack PCM of track 1 + the meter; the camera scratch track
+  untouched). No stored value = the device is never touched (v31 launch left the RØDE at Marko's 0 dB).
+- **AUTO GAIN** = the Sound Recorder's Gain Assistant (MANTRA_SOUND_RECORDER app/Audio.swift stepAutoGain, LESSONS 53): wait
+  for a peak > -45 dBFS (15 s), measure 5 s (countdown), peak → -12 dBFS, re-check 2 s until within 1.5 dB, 8 rounds; silent
+  = "SILENT, nothing changed"; never while recording; UNDO = the value before the press.
+- **32-bit float takes:** track 1 pcm_f32le in the MKV (camera scratch stays AAC); no full-scale guard, samples over 0 dBFS kept.
+  AAC takes hold samples at 0 dBFS (a guard, never a compressor). `audio.format` = aac (default) | f32.
+- **API:** `GET /gain`, `POST /gain {db|delta|reset|auto|undo|stop|clear|format:"aac"|"f32"|panel, uid?}`; /status `gain`
+  {dB, appliedBy hardware|digital|hardware+digital, hardware{db,min,max}, digitalDB, peakDB, rmsDB, holdDB, rawPeakDB,
+  overFullScaleSamples, clip, clipCount, format, auto{state,note,secondsLeft,undo}}. Track tag GAIN on track 1 of every take.
+- **Verified on the installed v31 (13:57-14:16, API, RØDE, signals from the ADAM):** hardware 20 → 30 dB: take mean +10.5 dB
+  (max +10.7), scratch ±0.2; digital 0 → +6: mean +6.3; float take +7.1 dBFS peak kept (AAC take of the same: -0.3); AUTO GAIN
+  -30 → -15 dB in one move, confirmed -11.9, take peak -12.2 dBFS; silence → failed, nothing changed; UNDO → -30; check_sync
+  +0.585 ms (IQR 0.014, 26 chirps); check_take pass: first after launch 8 s, LOW 10 s, slice HIGH 60 s (f32) and 240 s
+  (digital +3, 11256/11250 packets), kill -9 (f32, audio end +0.118 s); Resolve 21.1.2 imports the f32 MKV (Linear PCM 32,
+  3 ch); second click opened the box (real clicks); CLIP lamp red on a capture.
+- **Known:** the footer line "The input itself went to X dBFS" shows the LAST buffer's raw peak, not the highest since CLEAR
+  (the count of samples over 0 dBFS is right): fix in v32. Not done: a level-only meter for the scratch input; AUTO GAIN on a
+  device without its own volume was not run on the body (the digital path itself was measured by hand: +6 → +6.3 dB).
+
+
 **State 25.11.2026: v30 = SYNC: every sound input on the camera's frame (phase 1 of docs/AVSYNC_PLAN.md).**
 Marko (momentaryupdates.md): "It must be exactly in the same frame, the sound ... I can use any microphone." and, on the
 plan, "We are not going to use paid Apple account for now ... Yes."

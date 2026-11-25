@@ -171,3 +171,24 @@
     (camera scratch): chirps when present, else 1 s windows of any sound over −40 dBFS (music worked: IQR 0.15-0.24 ms).
     Quiet windows (room noise, −47 dBFS) gave false peaks of ±100-200 ms before the level gate: never trust a low-level window.
 
+51. **The RØDE NT1 5th Gen has a real input gain on the Mac (v31, 25.11.2026).** Core Audio input scope, main element:
+    VolumeScalar and VolumeDecibels both settable, range 0…60 dB (read-only probe first: at 13:38 it stood at 60 dB, by
+    13:46 Marko had put it to 0 dB himself in Audio MIDI Setup). Setting it moves the take by about the set dB (measured
+    in takes with pink noise from the ADAM: 20 → 30 dB = +10.5 dB mean, +10.7 dB max; the camera scratch unchanged within
+    0.2 dB). So GAIN uses the device first, like the CQ's gain knob (0 dB in the app = the device's top), digital only for
+    what the device cannot give. A device without one gets all of it digitally, in AudioTrack's PCM and in the meter.
+    Never write a device's volume unless a value is stored for it (gain.dB.<uid>) or Marko moves it: a new version must
+    not change his device by launching.
+52. **The RØDE's 32-bit float is real headroom, all the way into the buffers (v31).** Stream format f32 mono 48 kHz (24-bit
+    int and 96/192 kHz also offered); AVCaptureAudioDataOutput with no settings delivers the floats as they are: at 60 dB
+    with loud noise the buffers held samples to ±2.26 (+7.1 dBFS, 11183 samples over 0 dBFS in 12 s). An AAC take holds
+    them at 0 dBFS (our guard; AAC decode -0.3 dBFS), a 32-bit float take (pcm_f32le in MKV) kept +7.1 dBFS: nothing
+    clips, the level can be lowered later. Cost: 0.69 GB per hour mono, 1.38 GB stereo at 48 kHz.
+53. **AUTO GAIN is one module: the Sound Recorder's Gain Assistant (MANTRA_SOUND_RECORDER app/Audio.swift
+    toggleAutoGain/stepAutoGain, 31.10.2026, the CQ MixPad's "Auto Gain Steps").** Same numbers: wake above -45 dBFS,
+    15 s for sound, the loudest peak to -12 dBFS, rounds until within 1.5 dB, 8 rounds, 0.3 s to settle. Only the first
+    measuring window is 5 s (Marko plays at his loudest), the checks 2 s. Measured on the RØDE with ADAM chirps: -30 →
+    -15 dB in one move, confirmed -11.9; the take of the same chirps peaked at -12.2 dBFS. The peak is measured after the
+    digital gain and unclamped, so a clipped float input is seen as it is (the Sound Recorder could not see above 0).
+54. **A second click on an NSPopUpButton item is just its action with the same item.** Choosing the already chosen sound
+    input called selectMic again, which also STOPPED a running take (v30 and before). v31 opens the GAIN box instead.
