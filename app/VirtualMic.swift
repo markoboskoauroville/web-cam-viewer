@@ -42,6 +42,7 @@ final class Composite {
     private var ldrvMs = 0.0
     private var vpathMs = Composite.storedV, vSource = UserDefaults.standard.object(forKey: Composite.lastVKey) == nil ? "default" : "last measured"
     private var mantra = true                     // Zoom's microphone is Mantra VirtualCam (v34 default)
+    private var insertActive = false, insertL = 0.0, lappRet = 0.0   // v40: the measured INSERT (Insert.swift)
     private var bypass = false                    // test only (POST /virtualmic {"composite": false}): both holds 0
     // outputs (applied with a 2 ms hysteresis (v35; 1 ms in v34), so measurement noise never moves the sound)
     private var vHold = 0.0, aHold = 0.0, writeDelay = 30.0, aMs = 0.0, vMs = 0.0, applied = false
@@ -61,6 +62,14 @@ final class Composite {
     func setProcessor(_ ms: Double) { lock.lock(); processorMs = max(0, min(2000, ms)); lock.unlock(); recompute(force: true) }
     func setDriver(_ ms: Double) { lock.lock(); ldrvMs = max(0, ms); lock.unlock(); recompute() }
     func setLapp(_ ms: Double, measured: Bool) { lock.lock(); lappMs = ms; lappMeasured = measured; lock.unlock(); recompute() }
+    func setInsert(active: Bool, lMs: Double, lappRetMs: Double) {
+        lock.lock(); let was = insertActive; insertActive = active; insertL = lMs; lappRet = lappRetMs; lock.unlock()
+        recompute(force: was != active)
+    }
+    var micLappMs: Double { lock.lock(); defer { lock.unlock() }; return lappMs }
+    /// v40: where the Feed reads the INSERT's return ring: LappRet + audio_hold before the output time
+    var returnReadDelayMs: Double { lock.lock(); defer { lock.unlock() }; return lappRet + aHold }
+    var insertOn: Bool { lock.lock(); defer { lock.unlock() }; return insertActive }
     func setBypass(_ on: Bool) { lock.lock(); bypass = on; lock.unlock(); recompute(force: true) }
     func setMantra(_ on: Bool) { lock.lock(); let was = mantra; mantra = on; lock.unlock(); recompute(force: was != on) }
     /// VCAM's measured path (capture stamp → enqueue, without the hold), 4 times a second while it feeds
@@ -83,11 +92,12 @@ final class Composite {
     private func recompute(force: Bool = false) {
         lock.lock()
         let micOffset = -micSyncMs
-        let A = micOffset + processorMs + lappMs + ldrvMs
+        let L = insertActive ? insertL : processorMs, lapp = insertActive ? lappRet : lappMs
+        let A = micOffset + L + lapp + ldrvMs
         let V = vpathMs - videoDelayMs
         let vh = bypass ? 0 : max(0, A - V + trimMs)
         let ah = bypass ? 0 : min(Self.maxAudioHoldMs, max(0, V - A - trimMs))
-        let wd = lappMs + processorMs + ah
+        let wd = lapp + L + ah
         aMs = A; vMs = V
         if !applied || force || abs(wd - writeDelay) > 2.0 || abs(vh - vHold) > 2.0 || (vh > 0) != (vHold > 0) {
             if applied { changes += 1 }
@@ -110,6 +120,8 @@ final class Composite {
         lock.lock(); defer { lock.unlock() }
         return [
             "zoomMicIsMantra": mantra, "bypassed": bypass,
+            "insert": ["active": insertActive, "LMs": Self.r1(insertL), "LappReturnMs": Self.r1(lappRet),
+                       "returnReadDelayMs": Self.r1(lappRet + aHold)] as [String: Any],
             "mic": ["uid": vnn(micUID), "name": vnn(micName), "syncMs": micSyncMs, "reference": micReference] as [String: Any],
             "micOffsetMs": Self.r1(-micSyncMs), "LpwMs": Self.r1(processorMs), "LauMs": 0, "LappMs": Self.r1(lappMs),
             "LappMeasured": lappMeasured, "LdrvMs": Self.r1(ldrvMs),
@@ -145,6 +157,12 @@ final class VirtualMic {
         var flash = false
         var flashOffsetSec = 0.0           // mic time → picture time (SYNC − videoDelay)
         var validFrom: Int64 = 0           // the first sample of this run/timeline: anything older is silence, never old sound
+        // v40: the INSERT's return route (Insert.swift): when on, the Feed plays the return ring instead of the mic ring
+        var retOn = false
+        var retDelaySec = 0.0
+        var retRing: UnsafeMutablePointer<Float>?
+        var retShared: UnsafeMutablePointer<Shared>?
+        var retLk: UnsafeMutablePointer<os_unfair_lock>?
     }
     /// the IO proc's own state (only the IO proc writes; the status thread reads the counters, racy but harmless)
     struct Reader {
@@ -160,6 +178,7 @@ final class VirtualMic {
         var waitingCycles = 0
         var flashes = 0
         var boxN = 1
+        var onReturn = false               // v40: the route of the last cycle
     }
 
     private let ring: UnsafeMutablePointer<Float>
@@ -169,6 +188,23 @@ final class VirtualMic {
     private let reader: UnsafeMutablePointer<Reader>
     private let lk: UnsafeMutablePointer<os_unfair_lock>
     private let tickSec: Double
+    private let retReader: UnsafeMutablePointer<Reader>    // v40
+    private let retCache: UnsafeMutablePointer<Shared>
+    var ringPointer: UnsafeMutablePointer<Float> { ring }
+    /// real time: the mic ring's published state (a trylock; on a miss the copy stays as it was)
+    func trySnapshot(_ into: UnsafeMutablePointer<Shared>) {
+        if os_unfair_lock_trylock(lk) { into.pointee = shared.pointee; os_unfair_lock_unlock(lk) }
+    }
+    var feedAheadSec: Double { max(reader.pointee.aheadMax, reader.pointee.aheadMaxPrev) }
+    /// v40: the Feed plays the INSERT's return (nil = the mic, dry)
+    func setReturnRoute(_ r: AudioRing?, delaySec: Double) {
+        os_unfair_lock_lock(lk)
+        if let r { shared.pointee.retRing = r.ring; shared.pointee.retShared = r.shared; shared.pointee.retLk = r.lk }
+        shared.pointee.retOn = r != nil && shared.pointee.retRing != nil
+        shared.pointee.retDelaySec = delaySec
+        os_unfair_lock_unlock(lk)
+    }
+    var onReturnRoute: Bool { reader.pointee.onReturn }
 
     private let control = DispatchQueue(label: "webcamviewer.vmic.control", qos: .userInitiated)
     private let lock = NSLock()   // control-side values (never in the IO proc)
@@ -213,6 +249,8 @@ final class VirtualMic {
         cache = .allocate(capacity: 1); cache.initialize(to: Shared())
         reader = .allocate(capacity: 1); reader.initialize(to: Reader())
         lk = .allocate(capacity: 1); lk.initialize(to: os_unfair_lock())
+        retReader = .allocate(capacity: 1); retReader.initialize(to: Reader())
+        retCache = .allocate(capacity: 1); retCache.initialize(to: Shared())
         var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb)
         tickSec = Double(tb.numer) / Double(tb.denom) / 1e9
     }
@@ -416,7 +454,7 @@ final class VirtualMic {
         // Lapp: the newest sample must have arrived before the IO proc wants it
         let ahead = max(r.aheadMax, r.aheadMaxPrev)
         lappUpdate(ahead: ahead)
-        // v38: silence for more than half a second in the last 5 s while the input flows = the timeline is lost (seen once
+        // v40: silence for more than half a second in the last 5 s while the input flows = the timeline is lost (seen once
         // on v37 after test readers opened the RØDE and the Mantra VirtualCam mic: the fill swung between +129 and -401 ms
         // and only a VMIC restart cured it): start a new timeline with the next buffer, as a restart does
         if underrunRecentNow > Int(VirtualMic.outRate / 2) && now - lastHealAt > 5 {
@@ -600,6 +638,17 @@ final class VirtualMic {
         let ahead = H - nowSec + Double(n) / Self.outRate
         if nowSec - r.pointee.aheadWindowStart > 3 { r.pointee.aheadMaxPrev = r.pointee.aheadMax; r.pointee.aheadMax = 0; r.pointee.aheadWindowStart = nowSec }
         if ahead > r.pointee.aheadMax { r.pointee.aheadMax = ahead }
+        // v40: the INSERT's return instead of the mic (a fade-in from silence on every change of the route)
+        if sh.retOn, let rring = sh.retRing, let rsh = sh.retShared, let rlk = sh.retLk {
+            if !r.pointee.onReturn { r.pointee.onReturn = true; retReader.pointee.started = false }
+            if os_unfair_lock_trylock(rlk) { retCache.pointee = rsh.pointee; os_unfair_lock_unlock(rlk) }
+            RingRead.fill(ring: rring, size: AudioRing.size, sh: retCache.pointee, delay: sh.retDelaySec,
+                          r: retReader, H: H, outRate: Self.outRate, n: n, out: scratch)
+            write(bufs, n)
+            r.pointee.frames += n
+            return
+        }
+        if r.pointee.onReturn { r.pointee.onReturn = false; r.pointee.started = false }
         let rateIn = sh.rateIn
         let step = rateIn / Self.outRate
         r.pointee.boxN = step >= 1.5 ? Int(step.rounded()) : 1
@@ -741,6 +790,10 @@ final class VirtualMic {
             "drift": ["ppm": vnn(driftPpmLocked), "correctionMs": (sh.driftSec * 100_000).rounded() / 100,
                       "samplesDropped": r.drops, "samplesRepeated": r.repeats] as [String: Any],
             "jumps": r.jumps, "timelineRestarts": heals,
+            "soundRoute": r.onReturn ? "insert return" : "mic (dry)",
+            "returnReader": ["underrunFrames": retReader.pointee.underrunFrames, "jumps": retReader.pointee.jumps,
+                             "tooOldFrames": retReader.pointee.tooOldFrames, "drops": retReader.pointee.drops,
+                             "repeats": retReader.pointee.repeats, "fillMs": (retReader.pointee.lastFillSec * 10000).rounded() / 10] as [String: Any],
             "underruns": ["frames": r.underrunFrames, "cycles": r.underrunCycles, "recentFrames": underrunRecent] as [String: Any],
             "tooOldFrames": r.tooOldFrames,
             "cycles": r.cycles, "framesOut": r.frames, "waitingCycles": r.waitingCycles,

@@ -73,6 +73,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // v34: VMIC, the chosen sound into the Mantra VirtualCam microphone (VirtualMic.swift, VIRTUALCAM_PLAN VC-3/VC-4)
     private let vmicKey = NSButton()
     let vmic = VirtualMic()
+    // v40: INSERT per microphone (Insert.swift)
+    lazy var insert = InsertEngine(mic: vmic)
+    private var gainKeyWidth: NSLayoutConstraint?
     private let sonyLink = SonyLink()
     private lazy var sonyPanel = SonyPanel(link: sonyLink)
     private var sonyTop: NSLayoutConstraint!
@@ -425,7 +428,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         gainKey.setAccessibilityTitle("GAIN")
         gainKey.setContentHuggingPriority(.required, for: .horizontal)
         gainKey.setContentCompressionResistancePriority(.required, for: .horizontal)
-        gainKey.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        gainKeyWidth = gainKey.widthAnchor.constraint(equalToConstant: 26); gainKeyWidth?.isActive = true
         gainKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
         gainPanel.onSet = { [weak self] db in self?.setGain(db) }
         gainPanel.onStep = { [weak self] d in guard let self else { return }; self.setGain(self.currentGainDB + d) }
@@ -434,6 +437,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         gainPanel.onReset = { [weak self] in self?.setGain(0) }
         gainPanel.onFormat = { [weak self] f in self?.setFloatTakes(f) }
         gainPanel.onClose = { [weak self] in self?.setGainPanel(false) }
+        gainPanel.onInsert = { [weak self] on in _ = self?.apiSetInsert(["on": on]) }
+        gainPanel.onInsertSend = { [weak self] u in _ = self?.apiSetInsert(["send": u]) }
+        gainPanel.onInsertReturn = { [weak self] u in _ = self?.apiSetInsert(["return": u]) }
+        gainPanel.onInsertManual = { [weak self] t in
+            let v = Double(t.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces))
+            _ = self?.apiSetInsert(["manualMs": v.map { $0 as Any } ?? NSNull()])
+        }
+        gainPanel.onInsertMeasure = { [weak self] in self?.apiMeasureInsert([:]) { _ in } }
         autoGain.get = { [weak self] in self?.currentGainDB ?? 0 }
         autoGain.lo = { [weak self] in self?.gainMin ?? Gain.minDB }
         autoGain.set = { [weak self] db in self?.setGain(db, fromAuto: true) }
@@ -799,6 +810,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
         vcam.shutdown()   // v32: the sink stream stopped, OBS Virtual Camera goes back to its placeholder
+        insert.shutdown()   // v40
         vmic.shutdown()   // v34: the Feed's IO proc stopped; Zoom then hears silence from Mantra VirtualCam
         sonyLink.shutdown()
         statsTimer?.invalidate(); statsTimer = nil
@@ -2383,8 +2395,18 @@ extension Viewer {
             : g != 0 ? NSColor(srgbRed: 1, green: 0.78, blue: 0.30, alpha: 1) : .white
         gainKey.setAccessibilityTitle("GAIN")
         gainKey.setAccessibilityValue(gainInput == nil ? "no sound input" : gainDescription)
-        gainKey.toolTip = gainInput.map { "GAIN of \($0.localizedName): \(gainDescription). Click (or choose the same input again) for the gain, AUTO GAIN and the take's audio format." }
+        gainKey.toolTip = gainInput.map { "GAIN of \($0.localizedName): \(gainDescription). Click (or choose the same input again) for the gain, AUTO GAIN, the take's audio format and the INSERT." }
             ?? "GAIN: choose a sound input first"
+        // v40: "INS" beside the gear when this microphone's insert is on
+        let ins = gainInput.map { InsertEngine.settings($0.uniqueID).on } ?? false
+        let title = ins ? "INS" : ""
+        if gainKey.title != title {
+            gainKey.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .bold),
+                .foregroundColor: insert.state == "active" ? NSColor.systemGreen : NSColor.systemOrange])
+            gainKey.imagePosition = ins ? .imageLeading : .imageOnly
+            gainKeyWidth?.constant = ins ? 52 : 26
+        }
+        if ins { gainKey.setAccessibilityValue((gainKey.accessibilityValue() as? String ?? "") + ", insert " + insert.state) }
     }
 
     fileprivate func updateGainPanel() {
@@ -2411,9 +2433,11 @@ extension Viewer {
             : "Takes: AAC, the peaks held at 0 dBFS."
         if gRawPeak > 0 || gOverRaw > 0 { footer += String(format: " The input itself went to %+.1f dBFS (%d samples above 0 dBFS).", gRawPeak, gOverRaw) }
         if isRecording { footer += " The gain applies at once; the format to the next take." }
-        gainPanel.update(GainPanel.Model(sound: m.map { $0.localizedName + Self.audioTag } ?? "No sound", db: g, minDB: gainMin, detail: detail,
-                                         adjustable: m != nil, autoRunning: autoGain.running, canUndo: autoGain.before != nil,
-                                         note: note, floatTakes: Gain.floatTakes, formatEnabled: !isRecording, footer: footer))
+        var model = GainPanel.Model(sound: m.map { $0.localizedName + Self.audioTag } ?? "No sound", db: g, minDB: gainMin, detail: detail,
+                                    adjustable: m != nil, autoRunning: autoGain.running, canUndo: autoGain.before != nil,
+                                    note: note, floatTakes: Gain.floatTakes, formatEnabled: !isRecording, footer: footer)
+        fillInsertModel(&model)
+        gainPanel.update(model)
         gainPanel.showLevels(peak: gPeak, rms: gRms, hold: gHold, clip: Date() < gClipUntil, clips: gClips)
         updateGainKey()
     }
@@ -2606,6 +2630,9 @@ extension Viewer {
         let trim = UserDefaults.standard.object(forKey: VirtualCam.trimKey).flatMap { ($0 as? NSNumber)?.doubleValue } ?? 0
         Composite.shared.setTrim(trim)
         Composite.shared.setMantra(resolvedZoomMic?.uid == "mantra")
+        // v40: the INSERT follows the chosen microphone (its own settings; a mic without an insert is untouched)
+        let micUID = chosenSync?.uid
+        if insert.uid != micUID || (micUID.map { InsertEngine.settings($0).on } ?? false) != (insert.state != "off") { insert.apply(uid: micUID) }
     }
 
     func updateVmicKey() {
@@ -2659,5 +2686,95 @@ extension Viewer {
         if !cam.isEmpty, let err = vcam.configure(cam) { done(err); return }
         updateComposite()
         if let on = b["on"] as? Bool { setVmic(on) { done(nil) } } else { updateVcamKey(); done(nil) }
+    }
+}
+
+// MARK: v40, INSERT: send → another app → return, per microphone, with measured delay compensation (Insert.swift)
+extension Viewer {
+    fileprivate func fillInsertModel(_ m: inout GainPanel.Model) {
+        guard let mic = gainInput else { return }
+        let st = InsertEngine.settings(mic.uniqueID)
+        let devs = InsertEngine.devices()
+        m.insertEnabled = true
+        m.insertOn = st.on
+        m.sends = devs.filter { $0.outputs > 0 }.map { (uid: $0.uid, name: $0.name) }
+        m.returns = devs.filter { $0.inputs > 0 && $0.uid != mic.uniqueID }.map { (uid: $0.uid, name: $0.name + ($0.hidden ? " (hidden twin)" : "")) }
+        if !m.returns.contains(where: { $0.uid == st.ret }) { m.returns.insert((uid: st.ret, name: st.ret.isEmpty ? "choose…" : InsertEngine.name(st.ret)), at: 0) }
+        if !m.sends.contains(where: { $0.uid == st.send }) { m.sends.insert((uid: st.send, name: InsertEngine.name(st.send) + " (not here)"), at: 0) }
+        m.send = st.send; m.ret = st.ret
+        m.manual = st.manualMs.map { String(format: "%.3f", $0) } ?? ""
+        m.measuring = insert.state == "measuring"
+        let fps = syncFPS, rate = syncRate(currentMic)
+        if let l = st.latencyMs {
+            var t = "insert latency " + Sync.threeUnits(l, fps: fps, rate: rate).replacingOccurrences(of: "+", with: "")
+            t += st.manualMs != nil ? " (manual)" : ""
+            if let mm = st.measured, st.manualMs == nil {
+                t += String(format: " · spread %.3f ms · confidence %.2f · %@", (mm["spreadMs"] as? NSNumber)?.doubleValue ?? 0,
+                            (mm["medianConfidence"] as? NSNumber)?.doubleValue ?? 0, (mm["signal"] as? String) ?? "")
+            }
+            m.insertLatency = t + "\n" + Composite.shared.line
+        } else if st.on { m.insertLatency = "insert latency: not measured yet" }
+        if st.on {
+            let s = insert.status()
+            var notes: [String] = []
+            if let p = s["problem"] as? String { notes.append(p) }
+            if let n = s["note"] as? String { notes.append(n) }
+            notes += (s["warnings"] as? [String]) ?? []
+            if let lm = s["lastMeasure"] as? [String: Any], (lm["ok"] as? Bool) == false, let e = lm["error"] as? String { notes.append("MEASURE: " + e) }
+            m.insertNote = notes.joined(separator: "\n")
+        }
+    }
+
+    func apiInsert() -> [String: Any] {
+        var s = insert.status()
+        if let mic = chosenSync { s["microphone"] = mic.name; s["uid"] = mic.uid; let st = InsertEngine.settings(mic.uid); s["on"] = st.on }
+        s["devices"] = InsertEngine.devices().map { ["uid": $0.uid, "name": $0.name, "inputs": $0.inputs, "outputs": $0.outputs, "hidden": $0.hidden] }
+        s["composite"] = Composite.shared.status()
+        s["recording"] = isRecording
+        return s
+    }
+
+    /// POST /insert {on, send, return, manualMs (null clears), uid?, testDelaySamples (test), allowSameDevice (test)}
+    func apiSetInsert(_ b: [String: Any]) -> (ok: Bool, error: String) {
+        guard let uid = (b["uid"] as? String) ?? chosenSync?.uid else { return (false, "no sound input chosen") }
+        let d = UserDefaults.standard
+        if let v = b["send"] as? String { d.set(v, forKey: InsertEngine.key("send", uid)) }
+        if let v = b["return"] as? String { d.set(v, forKey: InsertEngine.key("return", uid)) }
+        if b.keys.contains("manualMs") {
+            if let v = (b["manualMs"] as? NSNumber)?.doubleValue {
+                guard v >= 0, v <= 2000 else { return (false, "manualMs must be 0 … 2000") }
+                d.set(v, forKey: InsertEngine.key("manualMs", uid))
+            } else { d.removeObject(forKey: InsertEngine.key("manualMs", uid)) }
+        }
+        if let v = (b["testDelaySamples"] as? NSNumber)?.intValue { insert.setTestDelay(v) }
+        if let v = b["allowSameDevice"] as? Bool { insert.allowSameDevice = v }
+        if let on = b["on"] as? Bool {
+            if on {
+                let st = InsertEngine.settings(uid)
+                let c = InsertEngine.check(send: st.send, ret: st.ret, micUID: uid, allowSame: insert.allowSameDevice)
+                if let e = c.error { return (false, e) }
+            }
+            d.set(on, forKey: InsertEngine.key("on", uid))
+        }
+        insert.apply(uid: chosenSync?.uid) { [weak self] in self?.refreshInsertUI() }
+        refreshInsertUI()
+        return (true, "")
+    }
+
+    /// POST /insert/measure {signal: chirp|click|noise, levelDB, repeats}: answers when done (about 5 s)
+    func apiMeasureInsert(_ b: [String: Any], _ done: @escaping ([String: Any]) -> Void) {
+        if isRecording { done(["ok": false, "error": "not while a take runs"]); return }
+        let sig = InsertEngine.Signal(rawValue: (b["signal"] as? String) ?? "chirp") ?? .chirp
+        let level = (b["levelDB"] as? NSNumber)?.doubleValue ?? -24
+        let reps = (b["repeats"] as? NSNumber)?.intValue ?? 5
+        insert.measure(signal: sig, levelDB: max(-60, min(-6, level)), repeats: reps) { [weak self] r in
+            self?.refreshInsertUI(); done(r)
+        }
+        refreshInsertUI()
+    }
+
+    func refreshInsertUI() {
+        updateGainKey()
+        if !gainPanel.isHidden { updateGainPanel() }
     }
 }

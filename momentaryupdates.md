@@ -1,5 +1,9 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v40, INSERT with plug-in delay compensation):** Marko (dictated; "HUD" read as "a"): *"[A] setting to mimic to have some kind of insert system so it can send to BlackHole the sound and receive it from the BlackHole. And then I can process it in Blue Cat, for example. And it needs to also be able to measure delay. So called plugin compensation delay, which is very popular in every DAW."*
+  Then: *"A mic setting [s] please for insert via BlackHole is what I meant with my last message."* (the INSERT is a per-microphone setting in the mic's GAIN box, stored per audio device UID like gain and SYNC)
+  Then: *"Insert via BlackHole is a universal route. I can plug in any application. Blue Cat or Ableton Live doesn't make any difference. All what application know, there is an insert path and it can send a signal to get the delay."* (application-agnostic send/return; the delay is learned only by measurement)
+
 **25.11.2026 (v39, the Sony overlay: SCAN next to the address, the settings in tabs):** Marko: *"Upgrade the camera control from the app. It needs to have next to the IP address scan. So it finds a camera automatically, and all the settings should be in the tabs, in different tabs. So they're organized by tabs."*
   Then, during the build (relayed word for word): *"The code for scanning the network we already have, and now the camera is connected over Wi Fi, so you can test this. We have a Mantra scanner, LAN scanner available."*
   And: *"Also, search engine for settings so I can filter settings and get the right settings on the screen."*

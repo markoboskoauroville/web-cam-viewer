@@ -131,6 +131,13 @@ final class ApiServer {
                     if let err { Self.send(c, 409, ["error": err]); return }
                     DispatchQueue.main.asyncAfter(deadline: .now() + ((req.body["on"] as? Bool) == true ? 1.0 : 0.3)) { Self.send(c, 200, v.apiVirtualMic()) }
                 }
+            // v40: INSERT per microphone (Insert.swift)
+            case ("GET", "/insert/status"), ("GET", "/insert"): Self.send(c, 200, v.apiInsert())
+            case ("POST", "/insert"):
+                let r = v.apiSetInsert(req.body)
+                if r.ok { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Self.send(c, 200, v.apiInsert()) } } else { Self.send(c, 409, ["error": r.error]) }
+            case ("POST", "/insert/measure"):
+                v.apiMeasureInsert(req.body) { r in Self.send(c, (r["ok"] as? Bool) == true ? 200 : 409, r) }
             case ("POST", "/sound"):
                 let r = v.apiSetSound(name: req.body["name"] as? String, id: req.body["id"] as? String, none: (req.body["none"] as? Bool) ?? false)
                 if r.ok { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Self.send(c, 200, v.apiStatus()) } } else { Self.send(c, 409, ["error": r.error]) }
@@ -198,7 +205,7 @@ final class ApiServer {
                 v.sony.apiSet(key: key, value: (req.body["value"] as? NSNumber)?.uint64Value, label: req.body["label"] as? String) { ok, text in
                     Self.send(c, ok ? 200 : 409, ["ok": ok, "result": text, "status": v.sony.apiStatus()])
                 }
-            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, flash, zoomMic}", "GET /virtualmic/status", "POST /virtualmic {on, processorLatencyMs, trimMs, flash}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {unit, value, fps?, rate?, uid?} {view} {presetSave:{name, device}} {presetApply|presetDelete: id} {presetRename:{id,name}} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}", "GET /sony/scan", "POST /sony/scan {wait|choose}", "GET /sony/props", "GET /sony/tab", "GET /sony/props?q=", "POST /sony/tab {tab, open, search}", "POST /sony/road {auto|wifi|usb}"]])
+            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, flash, zoomMic}", "GET /virtualmic/status", "GET /insert/status", "POST /insert {on, send, return, manualMs, uid?}", "POST /insert/measure {signal, levelDB, repeats}", "POST /virtualmic {on, processorLatencyMs, trimMs, flash}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {unit, value, fps?, rate?, uid?} {view} {presetSave:{name, device}} {presetApply|presetDelete: id} {presetRename:{id,name}} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}", "GET /sony/scan", "POST /sony/scan {wait|choose}", "GET /sony/props", "GET /sony/tab", "GET /sony/props?q=", "POST /sony/tab {tab, open, search}", "POST /sony/road {auto|wifi|usb}"]])
             }
         }
     }

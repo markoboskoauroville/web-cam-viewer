@@ -17,6 +17,16 @@ final class GainPanel: NSView {
         var floatTakes: Bool
         var formatEnabled: Bool
         var footer: String
+        // v40: the INSERT of this microphone (Insert.swift)
+        var insertOn = false
+        var insertEnabled = false
+        var sends: [(uid: String, name: String)] = []
+        var returns: [(uid: String, name: String)] = []
+        var send = "", ret = ""
+        var insertLatency = ""       // "insert latency 23.4 ms = 0.70 frames = 1123 samples · ..."
+        var insertNote = ""          // state, bypass reason, warnings
+        var manual = ""              // the manual override in ms, "" = measured
+        var measuring = false
     }
     var onSet: ((Double) -> Void)?
     var onStep: ((Double) -> Void)?
@@ -25,6 +35,11 @@ final class GainPanel: NSView {
     var onReset: (() -> Void)?
     var onFormat: ((Bool) -> Void)?
     var onClose: (() -> Void)?
+    var onInsert: ((Bool) -> Void)?
+    var onInsertSend: ((String) -> Void)?
+    var onInsertReturn: ((String) -> Void)?
+    var onInsertMeasure: (() -> Void)?
+    var onInsertManual: ((String) -> Void)?
 
     let meterView = GainMeterView()
     private let head = NSTextField(labelWithString: "")
@@ -37,6 +52,14 @@ final class GainPanel: NSView {
     private let minus = NSButton(), plus = NSButton()
     private let autoKey = NSButton(), undoKey = NSButton(), resetKey = NSButton(), closeKey = NSButton()
     private let aacKey = NSButton(), floatKey = NSButton()
+    // v40: INSERT
+    private let insertKey = NSButton(), measureKey = NSButton()
+    private let sendMenu = NSPopUpButton(frame: .zero, pullsDown: false), returnMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let insertLatency = NSTextField(wrappingLabelWithString: "")
+    private let insertNote = NSTextField(wrappingLabelWithString: "")
+    private let insertHelp = NSTextField(wrappingLabelWithString: InsertEngine.help)
+    private let manualField = NSTextField(string: "")
+    private var sendUIDs: [String] = [], returnUIDs: [String] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -105,7 +128,42 @@ final class GainPanel: NSView {
         meterView.translatesAutoresizingMaskIntoConstraints = false
         meterView.heightAnchor.constraint(equalToConstant: 16).isActive = true
 
-        let stack = NSStackView(views: [top, value, detail, meterView, readout, sliderRow, keys, note, fmtRow, footer])
+        // v40: INSERT: send → the other app → return, its measured delay (plug-in delay compensation)
+        Self.style(insertKey, "INSERT OFF", self, #selector(insertTapped))
+        insertKey.setAccessibilityTitle("INSERT")
+        insertKey.toolTip = "Send this microphone out of SEND into another app (PatchWork, Ableton Live, anything) and take it back from RETURN; the app compensates the measured delay."
+        Self.style(measureKey, "MEASURE DELAY", self, #selector(measureTapped))
+        measureKey.toolTip = "Plays short test bursts out of SEND (Zoom hears the dry sound meanwhile) and finds them on RETURN: the round trip is stored for this microphone."
+        let insRow = NSStackView(views: [insertKey, measureKey])
+        insRow.orientation = .horizontal; insRow.spacing = 6
+        for (m, t) in [(sendMenu, "SEND"), (returnMenu, "RETURN")] {
+            m.setAccessibilityTitle(t)
+            m.target = self; m.action = t == "SEND" ? #selector(sendChosen) : #selector(returnChosen)
+            m.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            m.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        }
+        let sendRow = NSStackView(views: [Self.heading("SEND"), sendMenu]); sendRow.orientation = .horizontal; sendRow.spacing = 6
+        let retRow = NSStackView(views: [Self.heading("RETURN"), returnMenu]); retRow.orientation = .horizontal; retRow.spacing = 6
+        insertLatency.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        insertLatency.textColor = NSColor.white.withAlphaComponent(0.85)
+        insertLatency.setAccessibilityIdentifier("insert-latency")
+        insertNote.font = .systemFont(ofSize: 11, weight: .semibold)
+        insertNote.textColor = NSColor(srgbRed: 1, green: 0.78, blue: 0.30, alpha: 1)
+        insertNote.setAccessibilityIdentifier("insert-note")
+        insertHelp.font = .systemFont(ofSize: 10, weight: .regular)
+        insertHelp.textColor = NSColor.white.withAlphaComponent(0.6)
+        manualField.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        manualField.placeholderString = "measured"
+        manualField.setAccessibilityTitle("INSERT MANUAL MS")
+        manualField.toolTip = "Your own insert delay in ms (Return applies); empty = the measured one"
+        manualField.target = self; manualField.action = #selector(manualTyped)
+        manualField.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        let manRow = NSStackView(views: [Self.heading("MANUAL"), manualField, Self.heading("ms (empty = measured)")])
+        manRow.orientation = .horizontal; manRow.spacing = 6
+
+        let stack = NSStackView(views: [top, value, detail, meterView, readout, sliderRow, keys, note, fmtRow,
+                                        Self.heading("INSERT (send → other app → return)"), insRow, sendRow, retRow, insertLatency,
+                                        manRow, insertNote, insertHelp, footer])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
         stack.setCustomSpacing(2, after: value)
         stack.setCustomSpacing(3, after: meterView)
@@ -123,6 +181,9 @@ final class GainPanel: NSView {
             sliderRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             note.widthAnchor.constraint(equalTo: stack.widthAnchor),
             footer.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            insertLatency.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            insertNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            insertHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -179,6 +240,31 @@ final class GainPanel: NSView {
         Self.mark(aacKey, !m.floatTakes); Self.mark(floatKey, m.floatTakes)
         for b in [aacKey, floatKey] { b.isEnabled = m.formatEnabled; b.alphaValue = m.formatEnabled ? 1 : 0.5 }
         footer.stringValue = m.footer
+        // v40: INSERT
+        let it = m.insertOn ? "INSERT ON" : "INSERT OFF"
+        if insertKey.attributedTitle.string != it {
+            insertKey.attributedTitle = NSAttributedString(string: it, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: NSColor.white])
+        }
+        insertKey.setAccessibilityTitle("INSERT")
+        Self.mark(insertKey, m.insertOn)
+        insertKey.isEnabled = m.insertEnabled; insertKey.alphaValue = m.insertEnabled ? 1 : 0.4
+        measureKey.isEnabled = m.insertOn && !m.measuring; measureKey.alphaValue = measureKey.isEnabled ? 1 : 0.4
+        Self.mark(measureKey, m.measuring)
+        if sendUIDs != m.sends.map({ $0.uid }) {
+            sendMenu.removeAllItems(); sendMenu.addItems(withTitles: m.sends.map { $0.name }); sendUIDs = m.sends.map { $0.uid }
+        }
+        if returnUIDs != m.returns.map({ $0.uid }) {
+            returnMenu.removeAllItems(); returnMenu.addItems(withTitles: m.returns.map { $0.name }); returnUIDs = m.returns.map { $0.uid }
+        }
+        if let i = sendUIDs.firstIndex(of: m.send) { sendMenu.selectItem(at: i) }
+        if let i = returnUIDs.firstIndex(of: m.ret) { returnMenu.selectItem(at: i) }
+        for x in [sendMenu, returnMenu] { x.isEnabled = m.insertEnabled }
+        insertLatency.stringValue = m.insertLatency
+        insertLatency.isHidden = m.insertLatency.isEmpty
+        insertNote.stringValue = m.insertNote
+        insertNote.isHidden = m.insertNote.isEmpty
+        if window?.firstResponder !== manualField.currentEditor() { manualField.stringValue = m.manual }
+        manualField.isEnabled = m.insertEnabled
     }
 
     /// the meter line under the value: "peak -14.2  RMS -28.5  hold -12.0 dBFS  CLIP 0"
@@ -198,6 +284,11 @@ final class GainPanel: NSView {
     @objc private func aacTapped() { onFormat?(false) }
     @objc private func floatTapped() { onFormat?(true) }
     @objc private func closeTapped() { onClose?() }
+    @objc private func insertTapped() { onInsert?(insertKey.attributedTitle.string != "INSERT ON") }
+    @objc private func measureTapped() { onInsertMeasure?() }
+    @objc private func sendChosen() { let i = sendMenu.indexOfSelectedItem; if i >= 0 && i < sendUIDs.count { onInsertSend?(sendUIDs[i]) } }
+    @objc private func returnChosen() { let i = returnMenu.indexOfSelectedItem; if i >= 0 && i < returnUIDs.count { onInsertReturn?(returnUIDs[i]) } }
+    @objc private func manualTyped() { onInsertManual?(manualField.stringValue); window?.makeFirstResponder(nil) }
     override func mouseDown(with event: NSEvent) {}
 }
 
