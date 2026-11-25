@@ -286,7 +286,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         snapKey.action = #selector(snapTapped)
         snapKey.setAccessibilityIdentifier("snap")
         snapKey.imagePosition = .imageOnly
-        snapper = SnapRemote(window: window, say: { [weak self] in self?.say($0) }, changed: { [weak self] in self?.updateSnapKey() })
+        snapper = SnapRemote(window: window, say: { [weak self] in self?.say($0) },
+                             unsay: { [weak self] t in if self?.message.stringValue == t { self?.say("") } }, changed: { [weak self] in self?.updateSnapKey() })
         updateSnapKey()
         // v17: F opens the folder the takes are written to (~/Movies), beside S
         folderKey.translatesAutoresizingMaskIntoConstraints = false
@@ -314,6 +315,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sonyKey.setAccessibilityIdentifier("sony")
         sonyKey.setContentHuggingPriority(.required, for: .horizontal)
         sonyLink.onChange = { [weak self] in self?.sonyPanel.update(); self?.updateSonyKey() }
+        sonyLink.startWatching()     // v28: a verdict that no longer applies is measured again and replaced by itself
         sonyPanel.onClose = { [weak self] in self?.setSony(false) }
         updateSonyKey()
 

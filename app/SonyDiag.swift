@@ -22,7 +22,13 @@ struct SonyDiagnosis {
     var at = Date()
 
     var reachable: Bool { ping || mac != nil }
-    var wifiRemoteOpen: Bool { port15740 || port22 || !ssdp.isEmpty }
+    /// v28, 25.11.2026: a VPN with a 0/1 route (utun) accepted EVERY TCP connect, so 15740 and 22 at 192.168.1.100 "opened"
+    /// while the camera answered no ping and had no ARP entry; the verdict said "The camera's Wi-Fi remote is open" and the
+    /// connect died with "Connection reset by peer". An open port counts only when the camera itself answers (ping/ARP) or SSDP.
+    var portsTrusted: Bool { reachable || !ssdp.isEmpty }
+    var wifiRemoteOpen: Bool { !ssdp.isEmpty || (portsTrusted && (port15740 || port22)) }
+    /// the camera on the cable, held by Sony's Imaging Edge Remote (the normal state while Marko works with Remote)
+    var heldByRemote: Bool { usb?.heldByOther == true }
 
     /// the stages, one line each, for the overlay
     var lines: [String] {
@@ -32,7 +38,11 @@ struct SonyDiagnosis {
         if address.isEmpty { l.append("2 Camera address: none saved, only SSDP can find it") }
         else { l.append("2 Camera \(address): " + (reachable ? "ON THE NETWORK (\(ping ? "answers ping" : "no ping")\(mac.map { ", MAC \($0.uppercased())" } ?? ""))" : "does not answer (no ping, no ARP entry)")) }
         l.append("3 SSDP: " + (ssdp.isEmpty ? "no Sony answered" : "answered (\(ssdp.count))"))
-        l.append("4 Remote port 15740: " + (port15740 ? "OPEN" : "closed") + " · SSH 22: " + (port22 ? "OPEN" : "closed"))
+        if (port15740 || port22) && !portsTrusted {
+            l.append("4 Remote ports: answered, but not by the camera (no ping, no ARP: a VPN or proxy accepts every address)")
+        } else {
+            l.append("4 Remote port 15740: " + (port15740 ? "OPEN" : "closed") + " · SSH 22: " + (port22 ? "OPEN" : "closed"))
+        }
         if let u = usb {
             l.append("5 USB: \(u.product) on the cable" + (u.heldByOther ? ", held by \(u.ownerName)" : (u.owner.map { ", held by \($0)" } ?? ", free")))
         } else { l.append("5 USB: no Sony on the cable") }
@@ -43,10 +53,10 @@ struct SonyDiagnosis {
     var verdict: String {
         if wifiRemoteOpen { return "The camera's Wi-Fi remote is open." }
         if let u = usb, u.heldByOther {
-            return "The camera is on USB and \(u.ownerName) holds it. TAKE CONTROL closes \(u.ownerName) and connects here over USB."
-                + (reachable ? " (It IS on Wi-Fi too, at \(address), but its remote port 15740 is closed.)" : "")
+            // v28: not an error. Marko works with Imaging Edge Remote; say it plainly and calmly.
+            return "Camera online, controlled by \(u.ownerName) (USB). TAKE CONTROL closes \(u.ownerName) and controls it from here."
         }
-        if let _ = usb { return "The camera is on USB and free: connecting over USB." }
+        if let u = usb { return "Camera online on USB (\(u.product)), free. CONNECT controls it from here." }
         if reachable {
             return "The camera IS on Wi-Fi (\(address)), but its remote control is off. On the camera: MENU → Network → Cnct./Remote Sht. → Remote Shoot Function → Remote Shooting: On (Wi-Fi Connect: On, same router as the Mac)."
         }
@@ -58,7 +68,7 @@ struct SonyDiagnosis {
         var u: Any = NSNull()
         if let usb { u = ["product": usb.product, "productID": usb.productID, "owner": orNull(usb.owner), "heldByOther": usb.heldByOther] as [String: Any] }
         return ["lan": orNull(lan.map { ["interface": $0.0, "address": $0.1] }), "address": address,
-                "ping": ping, "mac": orNull(mac), "ssdp": ssdp, "port15740": port15740, "port22": port22, "usb": u,
+                "ping": ping, "mac": orNull(mac), "ssdp": ssdp, "port15740": port15740, "port22": port22, "portsTrusted": portsTrusted, "usb": u,
                 "stages": lines, "verdict": verdict, "at": ISO8601DateFormatter().string(from: at)]
     }
 

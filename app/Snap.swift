@@ -16,6 +16,8 @@ final class SnapRemote {
 
     private let window: NSWindow
     private let say: (String) -> Void
+    private let unsay: (String) -> Void       // v28: clears the centre text only if it is still the one we put there
+    private var shown: String?                // our last centre text (e.g. "Opening Sony Imaging Edge Remote…")
     private let changed: () -> Void           // the button's title follows `isSnapped`
     private(set) var isSnapped = false
     private var remoteApp: NSRunningApplication?
@@ -26,14 +28,24 @@ final class SnapRemote {
     private var expectedRemote: NSRect?
     private var opening = false
 
-    init(window: NSWindow, say: @escaping (String) -> Void, changed: @escaping () -> Void) {
-        self.window = window; self.say = say; self.changed = changed
+    // v28, 25.11.2026: Marko: "So I asked you to open Sony Imaging Edge remote, and it is opened up. It's already here. It's
+    // online, but the message is kind of persistent on the screen." "Opening Sony Imaging Edge Remote…" was said when S opened
+    // Remote and nothing ever took it away: attach() succeeded (snapped, green S) and the text stayed over the picture.
+    // Every text this class puts in the centre now goes through tell(), and clear() takes it away once it no longer applies:
+    // snapped, unsnapped, Remote quit, or Remote opened from elsewhere.
+    init(window: NSWindow, say: @escaping (String) -> Void, unsay: @escaping (String) -> Void, changed: @escaping () -> Void) {
+        self.window = window; self.say = say; self.unsay = unsay; self.changed = changed
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(oursChanged), name: NSWindow.didMoveNotification, object: window)
         nc.addObserver(self, selector: #selector(oursChanged), name: NSWindow.didResizeNotification, object: window)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appTerminated(_:)),
                                                           name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appLaunched(_:)),
+                                                          name: NSWorkspace.didLaunchApplicationNotification, object: nil)
     }
+
+    private func tell(_ t: String) { shown = t; say(t) }
+    private func clear() { if let t = shown { unsay(t) }; shown = nil }
 
     // MARK: the button
 
@@ -49,22 +61,22 @@ final class SnapRemote {
         guard !isSnapped, !opening else { return }
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         guard AXIsProcessTrustedWithOptions(opts) else {
-            say("Snapping needs Accessibility.\nSystem Settings → Privacy & Security → Accessibility → switch on \(NAME), then press SNAP REMOTE again.")
+            tell("Snapping needs Accessibility.\nSystem Settings → Privacy & Security → Accessibility → switch on \(NAME), then press SNAP REMOTE again.")
             return
         }
         if let w = findWindow() { attach(w); return }
         // the remote is not open: open it, wait for its window
         guard FileManager.default.fileExists(atPath: Self.appPath) else {
-            say("Sony Imaging Edge Remote is not installed (\(Self.appPath)).")
+            tell("Sony Imaging Edge Remote is not installed (\(Self.appPath)).")
             return
         }
         opening = true
-        say("Opening Sony Imaging Edge Remote…")
+        tell("Opening Sony Imaging Edge Remote…")
         let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = false
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: Self.appPath), configuration: cfg) { [weak self] _, err in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let err { self.opening = false; self.say("Sony Imaging Edge Remote did not open: \(err.localizedDescription)"); return }
+                if let err { self.opening = false; self.tell("Sony Imaging Edge Remote did not open: \(err.localizedDescription)"); return }
                 self.waitForWindow(tries: 40)
             }
         }
@@ -72,11 +84,24 @@ final class SnapRemote {
 
     private func waitForWindow(tries: Int) {
         if let w = findWindow() { opening = false; attach(w); return }
-        if tries <= 0 { opening = false; say("Sony Imaging Edge Remote opened but shows no window yet.\nPress SNAP REMOTE again."); return }
+        if tries <= 0 {
+            opening = false
+            tell("Sony Imaging Edge Remote is open but shows no window yet.\nIt snaps by itself when its window appears.")
+            lateWindow(tries: 150)              // v28: keep looking (5 min), the text goes when it snaps or Remote quits
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.waitForWindow(tries: tries - 1) }
     }
 
+    private func lateWindow(tries: Int) {
+        guard !isSnapped, !opening else { return }
+        guard tries > 0, !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty else { clear(); return }
+        if let w = findWindow() { attach(w); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.lateWindow(tries: tries - 1) }
+    }
+
     func unsnap() {
+        clear()
         detach(); remoteApp = nil
         isSnapped = false
         UserDefaults.standard.set(false, forKey: "snapped")
@@ -123,7 +148,8 @@ final class SnapRemote {
     private func attach(_ w: AXUIElement) {
         detach()
         remoteWindow = w
-        guard let app = remoteApp, let r = remoteRect() else { say("The remote's window cannot be read."); return }
+        guard let app = remoteApp, let r = remoteRect() else { tell("The remote's window cannot be read."); return }
+        clear()                                          // v28: snapped, so "Opening…" and the like are over
         var obs: AXObserver?
         let cb: AXObserverCallback = { _, _, note, refcon in
             guard let refcon else { return }
@@ -223,8 +249,16 @@ final class SnapRemote {
     }
 
     @objc private func appTerminated(_ n: Notification) {
-        guard isSnapped, let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+        guard let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.bundleIdentifier == Self.bundleID else { return }
-        unsnap()
+        opening = false
+        if isSnapped { unsnap() } else { clear() }
+    }
+
+    /// v28: Remote opened from elsewhere (Dock, Marko, Claude): a text about opening it or about it missing no longer applies
+    @objc private func appLaunched(_ n: Notification) {
+        guard let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.bundleIdentifier == Self.bundleID, !opening else { return }
+        clear()
     }
 }

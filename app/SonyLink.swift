@@ -127,8 +127,9 @@ final class SonyLink {
             remember(f)
             proceed(f, connectAfter: connectAfter); return
         }
-        // no description answered: a camera at the typed address may still speak PTP-IP (or SSH) directly
-        if !addr.isEmpty {
+        // no description answered: a camera at the typed address may still speak PTP-IP (or SSH) directly.
+        // v28: only when the camera itself answers (ping/ARP); a VPN that accepts every TCP connect is not a camera.
+        if !addr.isEmpty, SonyDiagnosis.ping(addr) || SonyDiagnosis.arp(addr) != nil {
             if SonyTCP.canConnect(addr, 15740, timeout: 1.5) {
                 proceed(SonyFound(ip: addr, location: "", model: savedModel.isEmpty ? "Sony" : savedModel, name: "Sony", ssh: false), connectAfter: connectAfter); return
             }
@@ -142,13 +143,55 @@ final class SonyLink {
         d.lines.forEach { say($0) }
         if let u = d.usb, !u.heldByOther, connectAfter { connectUSB(); return }
         set(d.usb?.heldByOther == true ? .usbBusy : .notFound, d.verdict)
+        ui { self.watchedUSB = Self.usbSignature(d.usb) }
     }
 
     /// v23: the staged check alone (GET /sony/status?check=1, the overlay's CHECK key), nothing is connected
     func check(_ done: (() -> Void)? = nil) {
         work.async {
             let d = SonyDiagnosis.run(address: self.savedAddress)
-            self.ui { self.diagnosis = d; if !self.connected && self.phase != .connecting { self.message = d.verdict; if d.usb?.heldByOther == true { self.phase = .usbBusy } }; done?() }
+            self.ui {
+                self.diagnosis = d
+                self.watchedUSB = Self.usbSignature(d.usb)
+                // v28: the verdict replaces an old one both ways (usbBusy is left again when Remote lets the cable go)
+                if ([.idle, .notFound, .failed, .usbBusy] as [Phase]).contains(self.phase) {
+                    self.message = d.verdict
+                    self.phase = d.usb?.heldByOther == true ? .usbBusy : (self.phase == .usbBusy || self.phase == .failed ? .notFound : self.phase)
+                }
+                done?()
+            }
+        }
+    }
+
+    // MARK: v28, 25.11.2026: verdicts never go stale
+    // Marko: "It's online, but the message is kind of persistent on the screen." The verdict was measured once (08:05) and
+    // stayed after Imaging Edge Remote opened, and "read failed: Connection reset by peer" stayed as the status. Now, while not
+    // connected, the cable is read every 3 s (IOKit only, nothing opened): when the Sony appears, disappears or changes owner
+    // (Remote opened or closed), every stage is measured again at once; a verdict older than 60 s is measured again too.
+    private var watchedUSB: String?                 // main thread: "ILCE-7M5|pid 17139, Remote" at the last measurement
+    private var watchTimer: Timer?
+    private var watchBusy = false
+    static func usbSignature(_ u: SonyUSBPresence?) -> String { u.map { "\($0.product)|\($0.heldByOther ? ($0.owner ?? "") : "free")" } ?? "none" }
+
+    func startWatching() {
+        guard watchTimer == nil else { return }
+        watchTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.watchTick() }
+    }
+    private func watchTick() {
+        guard !demo, !watchBusy, ([.idle, .notFound, .failed, .usbBusy] as [Phase]).contains(phase) else { return }
+        // nothing measured yet and nothing to clear: stay quiet until SONY / CHECK asks
+        guard diagnosis != nil || phase != .idle else { return }
+        watchBusy = true
+        DispatchQueue.global(qos: .utility).async {
+            let sig = Self.usbSignature(SonyUSBPresence.find())
+            DispatchQueue.main.async {
+                let stale = self.phase != .idle && Date().timeIntervalSince(self.diagnosis?.at ?? .distantPast) > 60
+                if sig != self.watchedUSB || stale {
+                    if sig != self.watchedUSB { self.say("the cable changed (\(sig)): measuring again") }
+                    self.watchedUSB = sig
+                    self.check { self.watchBusy = false }
+                } else { self.watchBusy = false }
+            }
         }
     }
 
@@ -168,7 +211,7 @@ final class SonyLink {
             u.close(); link = nil
             let held = SonyUSBPresence.find()
             set(held?.heldByOther == true ? .usbBusy : .failed, held?.heldByOther == true
-                ? "The camera is on USB and \(held!.ownerName) holds it. TAKE CONTROL closes \(held!.ownerName) and connects here."
+                ? "Camera online, controlled by \(held!.ownerName) (USB). TAKE CONTROL closes \(held!.ownerName) and controls it from here."
                 : "USB: \(error)")
         }
     }
