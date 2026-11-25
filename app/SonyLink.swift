@@ -115,11 +115,11 @@ final class SonyLink {
     private func findNow(connectAfter: Bool) {
         if link != nil { return }
         let road = self.road                                  // v39: AUTO, WI-FI only or USB only
+        let addr = savedAddress
         if road != "usb" {
         set(.searching, "looking for the Sony on the network…")
         var locs = SonySSDP.search(seconds: 4, log: say)
         if let last = UserDefaults.standard.string(forKey: "sony.location"), !locs.contains(last) { locs.append(last) }
-        let addr = savedAddress
         if !addr.isEmpty {
             let l = "http://\(addr):64321/dd.xml"
             if !locs.contains(l) { locs.append(l) }
