@@ -70,6 +70,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // in lower right corner." Small, alpha 0.45, a slight shadow, clicks pass through, over every overlay.
     private let versionLabel = PassThroughLabel(labelWithString: "v\(VERSION)")
     let vcam = VirtualCam()
+    // v34: VMIC, the chosen sound into the Mantra VirtualCam microphone (VirtualMic.swift, VIRTUALCAM_PLAN VC-3/VC-4)
+    private let vmicKey = NSButton()
+    let vmic = VirtualMic()
     private let sonyLink = SonyLink()
     private lazy var sonyPanel = SonyPanel(link: sonyLink)
     private var sonyTop: NSLayoutConstraint!
@@ -185,6 +188,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         vcam.onChange = { [weak self] in self?.updateVcamKey() }
         vcam.cameraID = wantedID
         if UserDefaults.standard.bool(forKey: VirtualCam.onKey) && !test { vcam.setOn(true, auto: true) }
+        vmic.onChange = { [weak self] in self?.updateVcamKey() }
+        if UserDefaults.standard.bool(forKey: VirtualMic.onKey) && !test { vmic.setOn(true) }
         // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
         // have held it when it was chosen)
         watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkFrames() }
@@ -380,6 +385,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let vsh = NSShadow(); vsh.shadowColor = .black; vsh.shadowBlurRadius = 3; vsh.shadowOffset = .zero
         vcamNote.shadow = vsh
         vcamNote.setAccessibilityIdentifier("vcam-note")
+        // v34: VMIC left of VCAM, the same style: green ● feeding, orange waiting, red ● problem (remembered virtualmic.on)
+        vmicKey.translatesAutoresizingMaskIntoConstraints = false
+        vmicKey.isBordered = false
+        vmicKey.target = self; vmicKey.action = #selector(vmicTapped)
+        vmicKey.setAccessibilityIdentifier("vmic")
+        vmicKey.setContentHuggingPriority(.required, for: .horizontal)
+        vmicKey.setContentCompressionResistancePriority(.required, for: .horizontal)
         updateVcamKey()
 
         // v30: SYNC beside the sound menu: "SYNC +72" = the chosen input is held back 72 ms to sit on the camera's frame
@@ -460,6 +472,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         bar.addSubview(folderKey)
         bar.addSubview(sonyKey)
         bar.addSubview(vcamKey)
+        bar.addSubview(vmicKey)
 
         picture.translatesAutoresizingMaskIntoConstraints = false
         picture.wantsLayer = true
@@ -596,7 +609,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             vcamKey.trailingAnchor.constraint(equalTo: sonyKey.leadingAnchor, constant: -4),
             vcamKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             vcamKey.heightAnchor.constraint(equalToConstant: 30), vcamKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            permissions.trailingAnchor.constraint(equalTo: vcamKey.leadingAnchor, constant: -8),
+            vmicKey.trailingAnchor.constraint(equalTo: vcamKey.leadingAnchor, constant: -4),
+            vmicKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            vmicKey.heightAnchor.constraint(equalToConstant: 30), vmicKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            permissions.trailingAnchor.constraint(equalTo: vmicKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             picture.topAnchor.constraint(equalTo: content.topAnchor),
@@ -775,6 +791,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
         vcam.shutdown()   // v32: the sink stream stopped, OBS Virtual Camera goes back to its placeholder
+        vmic.shutdown()   // v34: the Feed's IO proc stopped; Zoom then hears silence from Mantra VirtualCam
         sonyLink.shutdown()
         statsTimer?.invalidate(); statsTimer = nil
         var r: Recorder?
@@ -1085,6 +1102,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         updateSyncKey()
         vcam.cameraID = current?.uniqueID ?? wantedID
         vcam.zoomMic = resolvedZoomMic
+        updateComposite()
         updateVcamKey()
         guard current != nil else { return }
         var frames = 0, drops = 0, width = 0, height = 0, format = "—"
@@ -1615,6 +1633,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if o === audioOut {
             lastAudioFormat = CMSampleBufferGetFormatDescription(sb)
             recorder?.appendAudio(sb)
+            vmic.submit(sb, gain: Gain.digitalLinear)   // v34: the same sound, mono, into the Mantra VirtualCam Feed
             // v31: the levels after the digital gain (what the take gets), with the raw peak and the clip flag
             let lv = Gain.levels(sb, g: Gain.digitalLinear)
             DispatchQueue.main.async { self.lastLevels = lv.rms; self.meter.setLevels(lv.rms); self.gainFeed(lv) }
@@ -1844,6 +1863,12 @@ extension Viewer {
     func apiStatus() -> [String: Any] {
         let rec = isRecording
         let vertical = wantedID.map { UserDefaults.standard.bool(forKey: "slice." + $0) } ?? false
+        var vmicBrief: [String: Any] = ["on": UserDefaults.standard.bool(forKey: VirtualMic.onKey), "state": vmic.summary.state]
+        vmicBrief["driverInstalled"] = VirtualMic.installed
+        vmicBrief["soundDelayMs"] = Composite.shared.writeDelayMs
+        vmicBrief["videoHoldMs"] = Composite.shared.videoHoldMs
+        vmicBrief["audioHoldMs"] = Composite.shared.audioHoldMs
+        vmicBrief["line"] = Composite.shared.line
         return ["version": VERSION, "camera": nn(current?.localizedName ?? wantedName), "id": nn(current?.uniqueID ?? wantedID), "waiting": waiting, "soundWaiting": micWaiting, "interrupted": interrupted, "slice": vertical,
                 "recording": rec, "elapsed": rec ? Date().timeIntervalSince(recStart ?? Date()) : 0,
                 "lastTake": nn(lastTake), "currentTake": rec ? nn(currentTake) : nn(nil),
@@ -1868,6 +1893,8 @@ extension Viewer {
                 "sync": apiSyncStatus(),
                 "gain": apiGainStatus(),
                 "vcam": vcam.summary.state,   // v32: off | feeding | conflict | problem | waiting (GET /virtualcam/status)
+                "vmic": vmic.summary.state,   // v34: off | feeding | waiting | problem (GET /virtualmic/status)
+                "virtualmic": vmicBrief,
                 "sony": sonyLink.apiStatus()]
     }
 
@@ -1992,7 +2019,7 @@ extension Viewer {
             .foregroundColor: c == nil ? NSColor.secondaryLabelColor : NSColor.white]
         let full = "SYNC" + (number.map { " " + $0 } ?? "")
         let fullWidth = ceil(NSAttributedString(string: full, attributes: attrs).size().width) + 10
-        let right = (permissions.isHidden ? vcamKey.frame.minX : permissions.frame.minX) - 10
+        let right = (permissions.isHidden ? vmicKey.frame.minX : permissions.frame.minX) - 10
         let needed = 10 + 118 + 10 + 118 + 10 + 26 + 10 + fullWidth + 10 + 30 + 10 + qualityKey.intrinsicContentSize.width
         let title = (right <= 0 || needed <= right) ? full : "SYNC"
         let old = syncKey.attributedTitle
@@ -2405,25 +2432,30 @@ extension Viewer {
         let zm = resolvedZoomMic
         let micLine: String
         if let zm {
-            micLine = zm.uid == "mantra" ? " Zoom mic: Mantra VirtualCam (the app holds the sound to the picture)."
+            micLine = zm.uid == "mantra" ? " Zoom mic: Mantra VirtualCam (VMIC: the app holds the sound to the picture)."
                 : zm.syncMs > 0 ? " Zoom mic: \(zm.name), SYNC \(Sync.text(zm.syncMs)): its sound is ahead of the picture; the picture cannot be earlier, the Mantra VirtualCam mic will hold the sound."
                 : zm.syncMs < 0 ? " Zoom mic: \(zm.name): picture delayed \(Sync.text(-zm.syncMs)) to match it."
                 : " Zoom mic: \(zm.name) (the camera's own sound, the reference)."
         } else { micLine = "" }
+        let compLine = zm?.uid == "mantra" ? " Now: " + Composite.shared.line + "." : ""
         vcamKey.toolTip = "VCAM: the picture as chosen (the 9:16 slice pillarboxed) into the OBS Virtual Camera, 1920x1080 at 60 fps; "
             + "in Zoom pick Camera → OBS Virtual Camera. OBS does not have to run; do not press OBS's own Start Virtual Camera while VCAM is on. "
-            + "Best capture mode for it: 1920x1080 · yuvs · 60. Now: \(value)." + micLine
-        let text = wanted ? sum.text : nil
+            + "Best capture mode for it: 1920x1080 · yuvs · 60. Now: \(value)." + micLine + compLine
+        updateVmicKey()
+        let micWanted = UserDefaults.standard.bool(forKey: VirtualMic.onKey)
+        let texts = [wanted ? sum.text : nil, micWanted ? vmic.summary.text : nil].compactMap { $0 }
+        let text = texts.isEmpty ? nil : texts.joined(separator: "\n")
         if vcamNote.stringValue != (text ?? "") { vcamNote.stringValue = text ?? "" }
         vcamNote.isHidden = text == nil
     }
 
     /// v33: the microphone Zoom uses (virtualcam.zoomMic; default = the sound input chosen here) with its SYNC value
     var resolvedZoomMic: VirtualCam.ZoomMic? {
+        // v34: the default is Mantra VirtualCam (nothing stored, or "mantra"); "raw" = the sound input chosen here
         let stored = UserDefaults.standard.string(forKey: VirtualCam.zoomMicKey)
-        if stored == "mantra" { return VirtualCam.ZoomMic(uid: "mantra", name: "Mantra VirtualCam", syncMs: 0) }
+        if stored == nil || stored == "mantra" { return VirtualCam.ZoomMic(uid: "mantra", name: "Mantra VirtualCam", syncMs: 0) }
         let nosound = UserDefaults.standard.bool(forKey: "nosound")
-        guard let uid = stored ?? (nosound ? nil : currentMic?.uniqueID) else { return nil }
+        guard let uid = stored == "raw" ? (nosound ? nil : currentMic?.uniqueID) : stored else { return nil }
         let name = mics.first { $0.uniqueID == uid }?.localizedName ?? (uid == currentMic?.uniqueID ? currentMic?.localizedName : nil) ?? uid
         let ms = Sync.isReference(uid: uid, name: name) ? 0 : Sync.audioDelayMs(uid: uid, name: name)
         return VirtualCam.ZoomMic(uid: uid, name: name, syncMs: ms)
@@ -2442,14 +2474,88 @@ extension Viewer {
         if let err = vcam.configure(b) { done(err); return }
         if let z = b["zoomMic"] as? String {   // "mantra", "default" (= the sound input chosen here), a UID or a name
             let n = z.lowercased()
-            if n == "default" || n.isEmpty { UserDefaults.standard.removeObject(forKey: VirtualCam.zoomMicKey) }
-            else if n == "mantra" || n.contains("mantra virtualcam") { UserDefaults.standard.set("mantra", forKey: VirtualCam.zoomMicKey) }
+            if n == "default" || n.isEmpty || n == "mantra" || n.contains("mantra virtualcam") { UserDefaults.standard.removeObject(forKey: VirtualCam.zoomMicKey) }
+            else if n == "raw" { UserDefaults.standard.set("raw", forKey: VirtualCam.zoomMicKey) }
             else if let m = mics.first(where: { $0.uniqueID == z }) ?? mics.first(where: { $0.localizedName.lowercased() == n })
                         ?? mics.first(where: { $0.localizedName.lowercased().contains(n) }) {
                 UserDefaults.standard.set(m.uniqueID, forKey: VirtualCam.zoomMicKey)
-            } else { done("no such sound input: \(z) (mantra, default, or a name from GET /sounds)"); return }
+            } else { done("no such sound input: \(z) (mantra = default, raw = the input chosen here, or a name from GET /sounds)"); return }
             vcam.zoomMic = resolvedZoomMic
         }
         if let on = b["on"] as? Bool { setVcam(on) { done(nil) } } else { done(nil) }
+    }
+}
+
+// MARK: v34, VMIC: the chosen sound into the Mantra VirtualCam microphone (VirtualMic.swift), the composite delay
+extension Viewer {
+    @objc fileprivate func vmicTapped() { setVmic(!UserDefaults.standard.bool(forKey: VirtualMic.onKey)) }
+
+    func setVmic(_ on: Bool, _ done: (() -> Void)? = nil) {
+        UserDefaults.standard.set(on, forKey: VirtualMic.onKey)
+        updateVcamKey()
+        vmic.setOn(on) { [weak self] in self?.updateVcamKey(); done?() }
+    }
+
+    /// the composite's inputs from what is chosen now (1 s, and on every change of the stats)
+    func updateComposite() {
+        let c = chosenSync
+        Composite.shared.setMic(uid: c?.uid, name: c?.name, syncMs: c?.ms ?? 0, reference: c?.reference ?? false)
+        Composite.shared.setVideoDelay((current?.uniqueID ?? wantedID).map { Sync.videoDelayMs($0) } ?? 0)
+        let trim = UserDefaults.standard.object(forKey: VirtualCam.trimKey).flatMap { ($0 as? NSNumber)?.doubleValue } ?? 0
+        Composite.shared.setTrim(trim)
+        Composite.shared.setMantra(resolvedZoomMic?.uid == "mantra")
+    }
+
+    func updateVmicKey() {
+        let wanted = UserDefaults.standard.bool(forKey: VirtualMic.onKey)
+        let sum = vmic.summary
+        let red = NSColor(srgbRed: 1, green: 0.42, blue: 0.38, alpha: 1)
+        let (title, color): (String, NSColor) = {
+            switch sum.state {
+            case "feeding": return ("VMIC ●", .systemGreen)
+            case "problem": return ("VMIC ●", red)
+            case "waiting": return ("VMIC", .systemOrange)
+            default: return ("VMIC", wanted ? .white : .secondaryLabelColor)
+            }
+        }()
+        let old = vmicKey.attributedTitle
+        let oldColor = old.length > 0 ? old.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil
+        if old.string != title || oldColor != color {
+            vmicKey.attributedTitle = NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: color])
+        }
+        vmicKey.setAccessibilityTitle("VMIC")
+        let value: String
+        switch sum.state {
+        case "feeding": value = "on, feeding Mantra VirtualCam"
+        case "problem": value = "on, problem: " + (sum.text ?? "")
+        case "waiting": value = "on, waiting: " + (sum.text ?? "")
+        default: value = "off"
+        }
+        vmicKey.setAccessibilityValue(value)
+        let input = chosenSync.map { $0.name } ?? "no sound input"
+        vmicKey.toolTip = "VMIC: the sound of \(input) (with its gain and SYNC) into the microphone Mantra VirtualCam, in step with VCAM's picture; "
+            + "in Zoom pick Microphone → Mantra VirtualCam and Camera → OBS Virtual Camera. Now: \(value). " + Composite.shared.line + "."
+            + (VirtualMic.installed ? "" : " The Mantra VirtualCam driver is not installed on this Mac.")
+    }
+
+    func apiVirtualMic() -> [String: Any] {
+        updateComposite()
+        var s = vmic.status(wanted: UserDefaults.standard.bool(forKey: VirtualMic.onKey))
+        s["soundInput"] = nn(chosenSync?.name)
+        s["zoomMic"] = resolvedZoomMic?.uid == "mantra" ? "Mantra VirtualCam" : (resolvedZoomMic?.name ?? "none")
+        s["vcamFeeding"] = vcam.summary.state == "feeding"
+        return s
+    }
+
+    /// POST /virtualmic {on?, processorLatencyMs?, trimMs?, flash? (test only: VMIC clicks and VCAM flashes together)}
+    func apiSetVirtualMic(_ b: [String: Any], _ done: @escaping (String?) -> Void) {
+        if let err = vmic.configure(b) { done(err); return }
+        var cam: [String: Any] = [:]
+        if let t = b["trimMs"] { cam["trimMs"] = t }
+        if let f = b["flash"] as? Bool { cam["flash"] = f }
+        if !cam.isEmpty, let err = vcam.configure(cam) { done(err); return }
+        updateComposite()
+        if let on = b["on"] as? Bool { setVmic(on) { done(nil) } } else { updateVcamKey(); done(nil) }
     }
 }

@@ -161,8 +161,11 @@ click.
 - `Pa`: the audio path = PatchWork `AUAudioUnit.latency` (+ its `tailTime` is ignored) + one IO buffer of the feed
   device + the visible device's `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset` (both 0 in BlackHole
   by default; read them, do not assume).
-- Applied delays: `D = audioDelay − videoDelay + (Pv − Pa) + trim`. If D ≥ 0, the audio is held back by D; if D < 0,
-  the video is held back by −D. The smaller of the two is always 0, so the total latency is as low as it can be.
+- Applied delays: `D = audioDelay − videoDelay + (Pv − Pa) − trim` (corrected 25.11.2026, v34: the first version said
+  `+ trim`, which moves the sound the wrong way; trim > 0 = in Zoom the sound is still LATER than the picture, so the
+  sound waits less / the picture waits more). If D ≥ 0, the audio is held back by D; if D < 0, the video is held back
+  by −D. The smaller of the two is always 0, so the total latency is as low as it can be. Implemented in v34 as
+  docs/VIRTUALCAM_BUILD.md §5: `video_hold = max(0, A − V + trim)`, `audio_hold = max(0, V − A − trim)`.
 
 **How each side applies it:**
 - **Video:** a small frame queue ordered by `capturePTS + videoHold`. A frame is enqueued into the sink when the host

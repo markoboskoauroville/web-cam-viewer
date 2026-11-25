@@ -49,6 +49,9 @@ final class VirtualCam {
     private var lastSent: Frame?
     private var lastSendAt = 0.0
     private var stampOn = false
+    private var flashOn = false           // v34 test only: a white frame at every whole second of the capture clock
+    private var lastConvertPTS = 0.0      // convert queue
+    private var flashes = 0
     private var extraMs = 0.0
     private var holdMs = 0.0, requestedMs = 0.0, videoDelayMs = 0.0, trimMs = 0.0, capMs = VirtualCam.defaultCapMs
     var cameraID: String? { get { lock.lock(); defer { lock.unlock() }; return camID } set { lock.lock(); camID = newValue; lock.unlock() } }
@@ -66,6 +69,7 @@ final class VirtualCam {
     private var micPictureMs = 0.0
     private var received = 0, busyDrops = 0, poolDrops = 0, ringDrops = 0, queueFullDrops = 0, skipped = 0
     private var sentTotal = 0, sentUnique = 0
+    private var paths: [Double] = []      // v34: capture stamp → enqueue minus the hold that frame had (Vpath of the composite)
     private var latencies: [Double] = [], processing: [Double] = [], arrivals: [Double] = [], converts: [Double] = []
     private var lastFreshAt = 0.0, lastFreshPTS = 0.0, period = 1.0 / 30
     private var pvMs = 0.0                // Pv: our own path (capture stamp → frame ready), median, refreshed with the hold
@@ -211,7 +215,7 @@ final class VirtualCam {
         queueCapacity = Int(CMSimpleQueueGetCapacity(qq))
         ring.removeAll(); lastSent = nil; lastSendAt = 0; feeding = true; startedAt = Self.now()
         received = 0; busyDrops = 0; poolDrops = 0; ringDrops = 0; queueFullDrops = 0; skipped = 0; sentTotal = 0; sentUnique = 0
-        latencies.removeAll(); processing.removeAll(); arrivals.removeAll(); converts.removeAll(); lastFreshAt = 0; lastFreshPTS = 0; period = 1.0 / 30; fpsUnique = 0; fpsSend = 0; fpsAt = Self.now(); fpsU0 = 0; fpsS0 = 0
+        latencies.removeAll(); paths.removeAll(); processing.removeAll(); arrivals.removeAll(); converts.removeAll(); lastFreshAt = 0; lastFreshPTS = 0; period = 1.0 / 30; fpsUnique = 0; fpsSend = 0; fpsAt = Self.now(); fpsU0 = 0; fpsS0 = 0
         lock.unlock()
         refreshHold()
         let t = DispatchSource.makeTimerSource(flags: .strict, queue: sendQueue)
@@ -245,18 +249,19 @@ final class VirtualCam {
         received += 1
         guard inFlight < 2 else { busyDrops += 1; lock.unlock(); return }
         inFlight += 1
-        let stamp = stampOn
+        let stamp = stampOn || flashOn
+        let flash = flashOn
         let t = CMTimeGetSeconds(pts), arrived = Self.now()
         arrivals.append((arrived - t) * 1000); if arrivals.count > 120 { arrivals.removeFirst(arrivals.count - 120) }
         lock.unlock()
-        convertQueue.async { self.convert(pb, t, arrived, slice, stamp) }
+        convertQueue.async { self.convert(pb, t, arrived, slice, stamp, flash) }
     }
 
     private var ringCapFrames: Int { Int(((capMs + 60) / 1000 * Self.cadence).rounded(.up)) + 3 }   // lock held
 
     /// the frame fitted into the sink's 1920x1080 (aspect kept, black bars, Lanczos), the slice = the same middle 9:16 strip
     /// as Slicer, pillarboxed; one resample from the camera's own pixels
-    private func convert(_ src: CVPixelBuffer, _ t: Double, _ arrived: Double, _ slice: Bool, _ stamp: Bool) {
+    private func convert(_ src: CVPixelBuffer, _ t: Double, _ arrived: Double, _ slice: Bool, _ stamp: Bool, _ flash: Bool) {
         defer { lock.lock(); inFlight -= 1; lock.unlock() }
         lock.lock(); let pool = self.pool; let W = outW, H = outH; let cap = ringCapFrames; lock.unlock()
         guard let pool else { return }
@@ -281,6 +286,13 @@ final class VirtualCam {
                                                     y: -e.minY + ((CGFloat(H) - e.height) / 2).rounded()))
         let frame = CGRect(x: 0, y: 0, width: W, height: H)
         var canvas = img.cropped(to: frame).composited(over: CIImage(color: CIColor.black).cropped(to: frame))
+        // v34 test only (POST /virtualcam {"flash": true}): the first frame stamped at or after a whole second of the host
+        // clock is white; VMIC clicks at the same moment of the picture's clock; tools/vcam_av_check.py reads both
+        if flash && lastConvertPTS > 0 && floor(t) != floor(lastConvertPTS) {
+            canvas = CIImage(color: CIColor.white).cropped(to: frame)
+            lock.lock(); flashes += 1; lock.unlock()
+        }
+        lastConvertPTS = t
         if stamp { canvas = Self.stamp(t, over: canvas, height: H) }
         ci.render(canvas, to: out, bounds: frame, colorSpace: nil)
         Slicer.tagColour(out, like: src)
@@ -322,9 +334,16 @@ final class VirtualCam {
         let trim = d.object(forKey: Self.trimKey).flatMap { ($0 as? NSNumber)?.doubleValue } ?? 0
         let cap = Self.storedCap
         let fromMic = max(0, -(mic?.syncMs ?? 0))      // only a mic LATER than the camera makes the picture wait
-        let req = video + fromMic + trim + extra
+        // v34: with Zoom's mic = Mantra VirtualCam the composite decides (VirtualMic.swift): the picture waits only when
+        // the sound path (plug-ins, buffers) is longer than the picture's; else the sound waits and the picture goes at once
+        let comp = Composite.shared
+        comp.setTrim(trim); comp.setVideoDelay(video)
+        lock.lock(); let vp = paths.count >= 20 ? Self.median(paths) : nil; let isFeeding = feeding; lock.unlock()
+        if let vp, isFeeding { comp.setVideoPath(vp) }
+        let mantra = mic?.uid == "mantra"
+        let req = mantra ? comp.videoHoldMs : video + fromMic + trim + extra
         lock.lock()
-        videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req; micPictureMs = fromMic
+        videoDelayMs = video; trimMs = trim; capMs = cap; requestedMs = req; micPictureMs = mantra ? 0 : fromMic
         holdMs = min(max(0, req), cap)
         pvMs = Self.median(processing) ?? 0
         lock.unlock()
@@ -381,6 +400,7 @@ final class VirtualCam {
         if fresh != nil {
             sentUnique += 1
             latencies.append((after - f.pts) * 1000); if latencies.count > 120 { latencies.removeFirst(latencies.count - 120) }
+            paths.append((after - f.pts) * 1000 - holdMs); if paths.count > 120 { paths.removeFirst(paths.count - 120) }
         }
         if now - fpsAt >= 1 {
             fpsUnique = Double(sentUnique - fpsU0) / (now - fpsAt); fpsSend = Double(sentTotal - fpsS0) / (now - fpsAt)
@@ -408,6 +428,7 @@ final class VirtualCam {
         lock.lock()
         if let v = (b["extraDelayMs"] as? NSNumber)?.doubleValue { extraMs = max(-1000, min(1000, v)) }
         if let s = b["stamp"] as? Bool { stampOn = s }
+        if let f = b["flash"] as? Bool { flashOn = f }
         lock.unlock()
         sendQueue.async { self.refreshHold() }
         return nil
@@ -456,15 +477,20 @@ final class VirtualCam {
             "arrivalMs": nn2(Self.median(arrivals).map(Self.r1)), "convertMs": nn2(Self.median(converts).map(Self.r1)),
             "inputPeriodMs": Self.r1(period * 1000),
             "zoomMic": zoomMicStatus(),
-            "delay": ["videoDelayMs": videoDelayMs, "zoomMicPictureMs": Self.r1(micPictureMs), "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
+            "delay": ["zoomMicIsMantra": zMic?.uid == "mantra", "videoDelayMs": videoDelayMs, "zoomMicPictureMs": Self.r1(micPictureMs), "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
                       "appliedMs": Self.r1(holdMs), "maxHoldMs": capMs, "capped": capped,
-                      "formula": "hold = sync.videoDelayMs.<video id> + max(0, -sync.audioDelayMs.<zoom mic>) + virtualcam.trimMs + extraDelayMs (audio path); a held frame leaves at capture + Pv + hold"] as [String: Any],
+                      "formula": zMic?.uid == "mantra"
+                        ? "Zoom mic Mantra VirtualCam: hold = the composite's video_hold = max(0, A - V + trim) (see composite); a held frame leaves at capture + Pv + hold"
+                        : "raw Zoom mic: hold = sync.videoDelayMs.<video id> + max(0, -sync.audioDelayMs.<zoom mic>) + virtualcam.trimMs + extraDelayMs; a held frame leaves at capture + Pv + hold"] as [String: Any],
             "delayApplied": Self.r1(holdMs),
             "droppedFrames": busyDrops + poolDrops + ringDrops,
             "drops": ["converterBusy": busyDrops, "poolLimit": poolDrops, "ringOverflow": ringDrops, "sinkQueueFull": queueFullDrops,
                       "skippedInRing": skipped] as [String: Any],
             "ringFrames": ring.count, "ringMB": Self.r1(Double(ring.count * outW * outH * 4) / 1_048_576),
-            "stamp": stampOn,
+            "stamp": stampOn, "flash": flashOn, "flashes": flashes,
+            "VpathMs": nn2(Self.median(paths).map(Self.r1)),
+            "videoHoldMs": Self.r1(holdMs),
+            "composite": Composite.shared.status(),
             "extensionVersion": nn2(extensionInfo?.version), "extensionState": nn2(extensionInfo?.state),
             "recommendedCapture": "1920x1080 · yuvs · 60 (the UGREEN's cleanest mode, LESSONS 55; the sink is 1920x1080 at 60)",
             "zoom": "In Zoom: Video → Camera → OBS Virtual Camera",
@@ -480,7 +506,7 @@ final class VirtualCam {
         let ahead = max(0, max(0, m.syncMs) + vcamMs - holdMs)
         let text: String
         if m.uid == "mantra" {
-            text = "Zoom mic Mantra VirtualCam: the app holds the sound to the picture (the audio-path version; until then nothing is written to it)."
+            text = "Zoom mic Mantra VirtualCam (VMIC): " + Composite.shared.line + "."
         } else if m.syncMs > 0 {
             text = String(format: "Zoom mic %@: its sound is %.1f ms ahead of the camera, and VCAM's picture path adds about %.0f ms, so in Zoom the sound comes about %.0f ms before the picture (less Zoom's own mic latency). The picture cannot be made earlier: the sound must wait, which the Mantra VirtualCam microphone will do.", m.name, m.syncMs, vcamMs, ahead)
         } else if m.syncMs < 0 {

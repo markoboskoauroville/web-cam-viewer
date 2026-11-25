@@ -116,8 +116,11 @@ The Feed's IO buffer is **not** a separate term: the app chooses, for the cycle 
 ring samples whose capture time is H − (A − micOffset) − audioHold, so whatever the buffer size, the sound lands at
 its planned host time.
 
-**Video path, fixed part:** `V = videoOffset + Pv`, where videoOffset = `sync.videoDelayMs.<camera uid>` (0 for the
+**Video path, fixed part:** `V = videoOffset + Pv`, where videoOffset = **−**`sync.videoDelayMs.<camera uid>` (0 for the
 UGREEN: it IS the reference) and Pv = our video processing time (enqueue host time − capture PTS, median over 1 s).
+(Sign corrected in v34, 25.11.2026: `sync.videoDelayMs` = "hold this camera's picture back", i.e. its picture stamps are
+EARLY against the reference, which makes its effective path shorter; with the first sign a held-back camera would have
+had its picture moved the wrong way. Same as the take path: audio offset = audioDelay − videoDelay.)
 The OBS extension forwards our PTS as is (≤ 5.6 ms poll), which Zoom then sees; that small part is inside `trim`.
 
 **The two holds** (one of them is always 0, so the total latency is as small as it can be):

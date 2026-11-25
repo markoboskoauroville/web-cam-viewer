@@ -7,7 +7,8 @@ import Network
 // Viewer functions the window and the record key call. Port written to ~/.mantra/ports/webcam-recorder.
 //   v23: GET /sounds  POST /sound {"name"|"id"|"none"}  GET /sony/status[?check=1]  POST /sony/check|connect|disconnect|takecontrol
 //   POST /sony/rec {"on"}  GET /sony/prop?code=  POST /sony/set {"code"|"name", "value"|"label"}
-//   v32: GET /virtualcam/status  POST /virtualcam {"on"?, "extraDelayMs"?, "maxHoldMs"?, "trimMs"?, "stamp"?}  v33: {"zoomMic": "mantra"|"default"|uid|name}
+//   v32: GET /virtualcam/status  POST /virtualcam {"on"?, "extraDelayMs"?, "maxHoldMs"?, "trimMs"?, "stamp"?}  v33: {"zoomMic": "mantra"|"default"|"raw"|uid|name}
+//   v34: GET /virtualmic/status  POST /virtualmic {"on"?, "processorLatencyMs"?, "trimMs"?, "flash"?}
 //   v31: GET /gain  POST /gain {"db"|"delta"|"reset"|"auto"|"undo"|"stop"|"clear"|"format":"aac"|"f32"|"panel", "uid"?}
 //   v30: GET /sync  POST /sync {"ms"|"delta"|"reset", "uid"|"name"?} | {"audio":{"uid","ms"}} | {"video":{"uid"?,"ms"}} | {"scratch"}
 //   GET /status   GET /cameras   GET /capture   POST /camera {"name"|"id","slice"}   POST /capture {"format"|"rate"|"mode"}   POST /quality {"quality"}   POST /record/start {"name"?}   POST /record/stop   POST /front   POST /fullscreen {"on"}   POST /snap {"on"}
@@ -122,6 +123,13 @@ final class ApiServer {
                     // a start: answer once frames went out (or the reason they cannot)
                     DispatchQueue.main.asyncAfter(deadline: .now() + ((req.body["on"] as? Bool) == true ? 1.0 : 0.3)) { Self.send(c, 200, v.apiVirtualCam()) }
                 }
+            // v34: VMIC, the sound into the Mantra VirtualCam microphone, and the composite delay (VirtualMic.swift)
+            case ("GET", "/virtualmic/status"), ("GET", "/virtualmic"): Self.send(c, 200, v.apiVirtualMic())
+            case ("POST", "/virtualmic"):
+                v.apiSetVirtualMic(req.body) { err in
+                    if let err { Self.send(c, 409, ["error": err]); return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + ((req.body["on"] as? Bool) == true ? 1.0 : 0.3)) { Self.send(c, 200, v.apiVirtualMic()) }
+                }
             case ("POST", "/sound"):
                 let r = v.apiSetSound(name: req.body["name"] as? String, id: req.body["id"] as? String, none: (req.body["none"] as? Bool) ?? false)
                 if r.ok { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Self.send(c, 200, v.apiStatus()) } } else { Self.send(c, 409, ["error": r.error]) }
@@ -157,7 +165,7 @@ final class ApiServer {
                 v.sony.apiSet(key: key, value: (req.body["value"] as? NSNumber)?.uint64Value, label: req.body["label"] as? String) { ok, text in
                     Self.send(c, ok ? 200 : 409, ["ok": ok, "result": text, "status": v.sony.apiStatus()])
                 }
-            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}"]])
+            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, flash, zoomMic}", "GET /virtualmic/status", "POST /virtualmic {on, processorLatencyMs, trimMs, flash}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}"]])
             }
         }
     }

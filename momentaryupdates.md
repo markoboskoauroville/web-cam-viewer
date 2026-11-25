@@ -1,5 +1,10 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v34 = VC-3/VC-4, the live sound into the Mantra VirtualCam microphone, the composite delay):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline ... During that, you need a composite for plugin delays so my students always see me playing in sync."*
+  And: *"I'm in Zoom. I choose my camera as OBS virtual camera. That's fine. I get image. But how to get sound which is processed with the same application webcam recorder and then have it in sync with sound, with images perfectly? That was the issue so far. So we solve this issue in recordings but how to do it in live stream"*
+  Then: *"So audio driver is finished, can we test it?"* / *"The driver is installed."*
+  v34 = the VMIC key (the chosen sound input, its gain and SYNC hold, into the hidden Feed of the Mantra VirtualCam driver) and the composite delay (video_hold / audio_hold); PatchWork inside the chain = v35.
+
 **25.11.2026 (v32 = VC-1, the picture into the OBS Virtual Camera):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline by taking the source code from a BlackHole virtual audio device I have here or use BlackHole as such. During that, you need a composite for plugin delays so my students always see me playing in sync."*
   And on the camera's name: *"We are not going to use paid Apple account for now, so the name states obvious with your camera."*
   Then, during a live Zoom call on the v32 VCAM (relayed word for word): *"Why my webcam is recording now? I'm not sure. It's just recording ... I can see webcam is working."* (it was a v32 test take, ZZTEST_slice_high_vcam_240; after this no more takes, toggles or installs while Zoom uses the camera)
