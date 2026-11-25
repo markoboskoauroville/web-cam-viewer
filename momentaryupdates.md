@@ -1,5 +1,7 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v29):** Marko: *"Now there is something broken in my web recorder, and the image is flickering. It's not coming from the shutter speed or light. No. It's stable. It's coming from display. What you have changed in display, it's causing the flickering in the picture. And also, I wanted to change the wording in... there is a list of drop down menu of the resolutions. Please don't write up to 60 FPS or up to 30 FPS. Just write 60 FPS max, 30 FPS max, making less text, please."*
+
 **25.11.2026 (v28):** Marko: *"Please debug my application, a webcam recorder. Right now, it's opened. So I asked you to open Sony Imaging Edge remote, and it is opened up. It's already here. It's online, but the message is kind of persistent on the screen."*
   Status 25.11.2026: done in v28 (the stuck text was "Opening Sony Imaging Edge Remote…"; stale and false Sony verdicts fixed; see TAKEOVER).
 
