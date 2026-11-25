@@ -78,7 +78,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let sliceLayer = AVSampleBufferDisplayLayer()
     private var sliceOn = false                        // capture queue
     private var horizontalSize: NSSize?                // the window's size before a slice, to go back to
-    static let sliceSuffix = " · vertical slice"
+    // v29, 25.11.2026: Marko: "next to UGREEN there is some strange strange square ... Simply make there in parenthesis,
+    // round ones. V for video, A for audio" and "remove the slice from the name of the video capture". The menus say
+    // "UGREEN 15389 (V)", "UGREEN 15389 (V) 9:16" (the vertical picture) and "UGREEN 15389 (A)"; the bar "UGREEN (V)".
+    // Selection is by index and device id, never by these titles.
+    static let videoTag = " (V)", audioTag = " (A)"
+    static let sliceSuffix = " (V) 9:16"
     static func sliceKey(_ d: AVCaptureDevice) -> String { "slice.\(d.uniqueID)" }
     private var mics: [AVCaptureDevice] = []
     private var current: AVCaptureDevice?
@@ -178,7 +183,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         for (i, d) in devices.enumerated() {
             for slice in [false, true] {
                 let cur = d.uniqueID == wantedID && savedSlice(d) == slice
-                cams.append(ChoiceOverlay.Row(title: d.localizedName + (slice ? Self.sliceSuffix : ""), current: cur,
+                cams.append(ChoiceOverlay.Row(title: d.localizedName + (slice ? Self.sliceSuffix : Self.videoTag), current: cur,
                                   action: { [weak self] in self?.chooseCamera(i, slice: slice) }))
             }
         }
@@ -186,7 +191,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let sid = UserDefaults.standard.bool(forKey: "nosound") ? nil : UserDefaults.standard.string(forKey: "sound")
         var snd: [ChoiceOverlay.Row] = []
         for (i, m) in mics.enumerated() {
-            snd.append(ChoiceOverlay.Row(title: m.localizedName, current: m.uniqueID == sid, action: { [weak self] in self?.chooseMic(i) }))
+            snd.append(ChoiceOverlay.Row(title: m.localizedName + Self.audioTag, current: m.uniqueID == sid, action: { [weak self] in self?.chooseMic(i) }))
         }
         snd.append(ChoiceOverlay.Row(title: "No sound", current: sid == nil, action: { [weak self] in self?.chooseMic(nil) }))
         overlay.show(cameras: cams, sounds: snd)
@@ -255,7 +260,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             p.setAccessibilityIdentifier(id)
             p.toolTip = tip
             p.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            p.widthAnchor.constraint(equalToConstant: 104).isActive = true
+            p.widthAnchor.constraint(equalToConstant: 118).isActive = true     // v29: room for "UGREEN (V)"
         }
         popup.action = #selector(picked)
         micPopup.action = #selector(pickedMic)
@@ -670,7 +675,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         for d in list {
             seen[d.localizedName, default: 0] += 1
             let n = seen[d.localizedName]!
-            p.addItem(withTitle: n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName)
+            p.addItem(withTitle: (n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName) + Self.audioTag)
         }
     }
 
@@ -683,7 +688,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             seen[d.localizedName, default: 0] += 1
             let n = seen[d.localizedName]!
             let name = n > 1 ? "\(d.localizedName) (\(n))" : d.localizedName
-            popup.addItem(withTitle: name); entries.append((i, false))
+            popup.addItem(withTitle: name + Self.videoTag); entries.append((i, false))
             popup.addItem(withTitle: name + Self.sliceSuffix); entries.append((i, true))
         }
     }
@@ -985,7 +990,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             let maxRate = Self.maximumFrameRate(format)
             let key = "\(dimensions.width)x\(dimensions.height):\(codec):\(maxRate)"
             guard seen.insert(key).inserted else { continue }
-            let item = NSMenuItem(title: "\(dimensions.width)×\(dimensions.height) · \(codec) · up to \(Self.rateText(maxRate)) FPS",
+            let item = NSMenuItem(title: "\(dimensions.width)×\(dimensions.height) · \(codec) · \(Self.rateText(maxRate)) FPS max",
                                  action: #selector(pickCaptureFormat(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = format
@@ -1182,7 +1187,26 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private static func captureFormatPreference(_ device: AVCaptureDevice) -> String {
-        "capture.format.\(device.uniqueID)"
+        migrateCapture(device)
+        return "capture.format.\(device.uniqueID)"
+    }
+
+    /// v29, 25.11.2026: the UGREEN came back as 0x2130002b895389 instead of 0x22000002b895389 (another USB port: the
+    /// location half of the id changed, its vendor+product 2b89:5389 did not) and its remembered 2560x1440 30 was lost.
+    /// When this id has no remembered mode, the one remembered for the same vendor+product (the id's last 8 hex digits)
+    /// is copied over, rate included.
+    private static func migrateCapture(_ device: AVCaptureDevice) {
+        let d = UserDefaults.standard, id = device.uniqueID
+        guard d.string(forKey: "capture.format.\(id)") == nil, id.hasPrefix("0x"), id.count > 10 else { return }
+        let tail = String(id.suffix(8))
+        guard let other = d.dictionaryRepresentation().keys.sorted().first(where: {
+            $0.hasPrefix("capture.format.0x") && $0 != "capture.format.\(id)" && $0.hasSuffix(tail) }),
+              let fmt = d.string(forKey: other) else { return }
+        let oldID = String(other.dropFirst("capture.format.".count))
+        d.set(fmt, forKey: "capture.format.\(id)")
+        let r = d.double(forKey: "capture.rate.\(oldID)")
+        if r > 0 { d.set(r, forKey: "capture.rate.\(id)") }
+        NSLog("Webcam Recorder: capture mode of %@ moved to its new id %@ (%@)", oldID, id, fmt)
     }
 
     private static func captureRatePreference(_ device: AVCaptureDevice) -> String {
@@ -1523,9 +1547,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 final class ShortPopUpCell: NSPopUpButtonCell {
     override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
         let text = title.string
-        if text.hasSuffix(Viewer.sliceSuffix) {
-            let short = "▯ " + String(text.dropLast(Viewer.sliceSuffix.count).prefix(6))
-            return super.drawTitle(NSAttributedString(string: short, attributes: title.attributes(at: 0, effectiveRange: nil)),
+        // v29: "UGREEN 15389 (V) 9:16" → "UGREEN (V)": six characters of the name and the plain (V) / (A) tag, no symbol glyph
+        for (suffix, tag) in [(Viewer.sliceSuffix, Viewer.videoTag), (Viewer.videoTag, Viewer.videoTag), (Viewer.audioTag, Viewer.audioTag)]
+        where text.hasSuffix(suffix) && title.length > 0 {
+            let name = String(text.dropLast(suffix.count).prefix(6)).trimmingCharacters(in: .whitespaces)
+            return super.drawTitle(NSAttributedString(string: name + tag, attributes: title.attributes(at: 0, effectiveRange: nil)),
                                    withFrame: frame, in: controlView)
         }
         let length = (String(text.prefix(8)) as NSString).length

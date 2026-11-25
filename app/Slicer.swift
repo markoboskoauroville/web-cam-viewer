@@ -51,6 +51,7 @@ final class Slicer {
         let e = img.extent
         img = img.transformed(by: CGAffineTransform(translationX: -e.minX + (CGFloat(Self.outW) - e.width) / 2, y: -e.minY))
         ci.render(img, to: out, bounds: CGRect(x: 0, y: 0, width: Self.outW, height: Self.outH), colorSpace: nil)
+        Self.tagColour(out, like: src)
 
         var fd: CMVideoFormatDescription?
         CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: out, formatDescriptionOut: &fd)
@@ -62,6 +63,24 @@ final class Slicer {
         CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: out, formatDescription: fd,
                                                  sampleTiming: &timing, sampleBufferOut: &made)
         return made
+    }
+
+    /// v29, 25.11.2026: Marko: "the image is flickering ... It's coming from display." The sliced BGRA buffers carried no
+    /// colour tags, and the AVSampleBufferDisplayLayer showed the same untagged frames in two different renderings (one
+    /// washed out), switching while the recorded frames stayed flat (Y range 0.2 between frames). Each frame now carries the
+    /// camera frame's own primaries / transfer function (Rec. 709 when the camera says nothing) and the matching CGColorSpace,
+    /// so every path that draws it (compositor or overlay plane) draws it the same way.
+    static func tagColour(_ out: CVPixelBuffer, like src: CVPixelBuffer) {
+        func att(_ k: CFString) -> CFTypeRef? { CVBufferCopyAttachment(src, k, nil) }
+        let primaries = att(kCVImageBufferColorPrimariesKey) ?? (kCVImageBufferColorPrimaries_ITU_R_709_2 as CFTypeRef)
+        let transfer = att(kCVImageBufferTransferFunctionKey) ?? (kCVImageBufferTransferFunction_ITU_R_709_2 as CFTypeRef)
+        CVBufferSetAttachment(out, kCVImageBufferColorPrimariesKey, primaries, .shouldPropagate)
+        CVBufferSetAttachment(out, kCVImageBufferTransferFunctionKey, transfer, .shouldPropagate)
+        CVBufferSetAttachment(out, kCVImageBufferYCbCrMatrixKey, att(kCVImageBufferYCbCrMatrixKey) ?? (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as CFTypeRef), .shouldPropagate)
+        let dict = [kCVImageBufferColorPrimariesKey: primaries, kCVImageBufferTransferFunctionKey: transfer] as CFDictionary
+        if let cs = CVImageBufferCreateColorSpaceFromAttachments(dict)?.takeRetainedValue() {
+            CVBufferSetAttachment(out, kCVImageBufferCGColorSpaceKey, cs, .shouldPropagate)
+        }
     }
 
     private static func lanczos(_ img: CIImage, _ scale: CGFloat) -> CIImage {
