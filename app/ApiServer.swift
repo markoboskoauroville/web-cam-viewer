@@ -7,6 +7,7 @@ import Network
 // Viewer functions the window and the record key call. Port written to ~/.mantra/ports/webcam-recorder.
 //   v23: GET /sounds  POST /sound {"name"|"id"|"none"}  GET /sony/status[?check=1]  POST /sony/check|connect|disconnect|takecontrol
 //   POST /sony/rec {"on"}  GET /sony/prop?code=  POST /sony/set {"code"|"name", "value"|"label"}
+//   v39: GET|POST /sony/scan {wait|choose}  GET /sony/props  GET|POST /sony/tab {tab, open}  POST /sony/road
 //   v32: GET /virtualcam/status  POST /virtualcam {"on"?, "extraDelayMs"?, "maxHoldMs"?, "trimMs"?, "stamp"?}  v33: {"zoomMic": "mantra"|"default"|"raw"|uid|name}
 //   v34: GET /virtualmic/status  POST /virtualmic {"on"?, "processorLatencyMs"?, "trimMs"?, "flash"?}
 //   v31: GET /gain  POST /gain {"db"|"delta"|"reset"|"auto"|"undo"|"stop"|"clear"|"format":"aac"|"f32"|"panel", "uid"?}
@@ -156,6 +157,38 @@ final class ApiServer {
                     }
                 }
                 wait()
+            // v39: SCAN (SonyScan.swift), the settings by tab, the overlay's tab
+            case ("GET", "/sony/scan"): Self.send(c, 200, v.sony.scanner.json)
+            case ("POST", "/sony/scan"):
+                if let a = req.body["choose"] as? String { v.sony.choose(a); Self.send(c, 200, v.sony.scanner.json); return }
+                let wait = (req.body["wait"] as? NSNumber)?.doubleValue ?? 25
+                if v.sony.scanner.state != .running { v.sony.scan() }
+                let end = Date().addingTimeInterval(wait)
+                func poll() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if v.sony.scanner.state != .running || Date() > end {
+                            var j = v.sony.scanner.json; j["savedAddress"] = v.sony.savedAddress; j["road"] = v.sony.road
+                            Self.send(c, 200, j)
+                        } else { poll() }
+                    }
+                }
+                if wait <= 0 { Self.send(c, 200, v.sony.scanner.json) } else { poll() }
+            case ("GET", "/sony/props"):
+                // v39: ?q=<text> = the SEARCH SETTINGS filter over the cached list (the camera is not asked)
+                var q: String?
+                for part in req.query.split(separator: "&") where part.hasPrefix("q=") {
+                    q = String(part.dropFirst(2)).replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+                }
+                Self.send(c, 200, v.sony.apiProps(query: q))
+            case ("GET", "/sony/tab"): Self.send(c, 200, v.apiSonyTab(nil, open: nil) ?? [:])
+            case ("POST", "/sony/tab"):
+                if let r = v.apiSonyTab(req.body["tab"] as? String, open: req.body["open"] as? Bool, search: req.body["search"] as? String) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Self.send(c, 200, r) }
+                } else { Self.send(c, 409, ["error": "no such tab", "tabs": SonyTab.allCases.map(\.rawValue)]) }
+            case ("POST", "/sony/road"):
+                let r = (req.body["road"] as? String ?? "").lowercased().replacingOccurrences(of: "-", with: "")
+                guard ["auto", "wifi", "usb"].contains(r) else { Self.send(c, 409, ["error": "road is auto, wifi or usb"]); return }
+                v.sony.road = r; Self.send(c, 200, v.sony.apiStatus())
             case ("GET", "/sony/prop"):
                 let key = req.query.components(separatedBy: "&").first { $0.hasPrefix("code=") }.map { String($0.dropFirst(5)) } ?? ""
                 if let code = v.sony.code(for: key.removingPercentEncoding ?? key), let p = v.sony.apiProp(code) { Self.send(c, 200, p) }
@@ -165,7 +198,7 @@ final class ApiServer {
                 v.sony.apiSet(key: key, value: (req.body["value"] as? NSNumber)?.uint64Value, label: req.body["label"] as? String) { ok, text in
                     Self.send(c, ok ? 200 : 409, ["ok": ok, "result": text, "status": v.sony.apiStatus()])
                 }
-            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, flash, zoomMic}", "GET /virtualmic/status", "POST /virtualmic {on, processorLatencyMs, trimMs, flash}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {unit, value, fps?, rate?, uid?} {view} {presetSave:{name, device}} {presetApply|presetDelete: id} {presetRename:{id,name}} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}"]])
+            default: Self.send(c, 404, ["error": "unknown endpoint", "endpoints": ["GET /status", "GET /cameras", "GET /capture", "POST /camera", "POST /capture", "POST /quality", "POST /record/start", "POST /record/stop", "POST /front", "POST /fullscreen", "POST /snap", "GET /sounds", "POST /sound", "GET /virtualcam/status", "POST /virtualcam {on, extraDelayMs, maxHoldMs, trimMs, stamp, flash, zoomMic}", "GET /virtualmic/status", "POST /virtualmic {on, processorLatencyMs, trimMs, flash}", "GET /sync", "GET /gain", "POST /gain {db|delta|reset|auto|undo|stop|clear|format|panel, uid?}", "POST /sync {ms|delta|reset, uid|name?} {unit, value, fps?, rate?, uid?} {view} {presetSave:{name, device}} {presetApply|presetDelete: id} {presetRename:{id,name}} {video:{uid?,ms}} {scratch}", "GET /sony/status[?check=1]", "POST /sony/check", "POST /sony/connect", "POST /sony/disconnect", "POST /sony/takecontrol", "POST /sony/rec {on}", "GET /sony/prop?code=", "POST /sony/set {code|name, value|label}", "GET /sony/scan", "POST /sony/scan {wait|choose}", "GET /sony/props", "GET /sony/tab", "GET /sony/props?q=", "POST /sony/tab {tab, open, search}", "POST /sony/road {auto|wifi|usb}"]])
             }
         }
     }

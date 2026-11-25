@@ -36,7 +36,15 @@ struct SonyDiagnosis {
         if let lan { l.append("1 Mac: \(lan.0) \(lan.1)\(allLans.count > 1 ? " (also " + allLans.filter { $0 != lan }.map { "\($0.0) \($0.1)" }.joined(separator: ", ") + ")" : "")") }
         else { l.append("1 Mac: NO local network (no Wi-Fi or Ethernet address)") }
         if address.isEmpty { l.append("2 Camera address: none saved, only SSDP can find it") }
-        else { l.append("2 Camera \(address): " + (reachable ? "ON THE NETWORK (\(ping ? "answers ping" : "no ping")\(mac.map { ", MAC \($0.uppercased())" } ?? ""))" : "does not answer (no ping, no ARP entry)")) }
+        else {
+            // v39: say whose MAC it is: a phone at the saved address is not the camera
+            let who = mac.map { m -> String in
+                let n = SonyOUI.normal(m)
+                if n == SonyOUI.normal(SonyScan.rememberedMac) { return ", this camera's MAC" }
+                return SonyOUI.vendor(m).map { ", \($0 == SonyOUI.sonyName ? "Sony" : "Murata Wi-Fi") prefix" } ?? ", NOT a Sony prefix: another device? SCAN finds the camera"
+            } ?? ""
+            l.append("2 Camera \(address): " + (reachable ? "ON THE NETWORK (\(ping ? "answers ping" : "no ping")\(mac.map { ", MAC \($0.uppercased())" } ?? "")\(who))" : "does not answer (no ping, no ARP entry)"))
+        }
         l.append("3 SSDP: " + (ssdp.isEmpty ? "no Sony answered" : "answered (\(ssdp.count))"))
         if (port15740 || port22) && !portsTrusted {
             l.append("4 Remote ports: answered, but not by the camera (no ping, no ARP: a VPN or proxy accepts every address)")

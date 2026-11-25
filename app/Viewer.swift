@@ -541,7 +541,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sonyPanel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(sonyPanel, positioned: .below, relativeTo: bar)  // under the bar, never over it
         sonyTop = sonyPanel.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
-        NSLayoutConstraint.activate([sonyTop, sonyPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        // v39: the overlay ends above the version line in the lower right corner
+        NSLayoutConstraint.activate([sonyTop, sonyPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
             sonyPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: StereoMeter.width),
             sonyPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
         syncPanel.translatesAutoresizingMaskIntoConstraints = false
@@ -576,7 +577,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
             if e.keyCode == 53, !self.gainPanel.isHidden { self.setGainPanel(false); return nil }   // v31: the GAIN box
             if e.keyCode == 53, !self.syncPanel.isHidden { self.setSync(false); return nil }   // v30: the SYNC box first
-            if e.keyCode == 53, !self.sonyPanel.isHidden { self.setSony(false); return nil }   // Escape hides the Sony controls
+            if e.keyCode == 53, !self.sonyPanel.isHidden { if !self.sonyPanel.clearSearch() { self.setSony(false) }; return nil }   // Escape: the search first (v39), then hides the Sony controls
             if e.keyCode == 53, !self.overlay.isHidden { self.overlay.close(); return nil }   // Escape closes the choice
             if e.keyCode == 53, self.isFull { self.toggleFull(); return nil }   // Escape
             return e
@@ -712,6 +713,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             if !overlay.isHidden { overlay.close() }
             sonyPanel.update()
             if connect, !sonyLink.connected, [SonyLink.Phase.idle, .notFound, .failed, .usbBusy].contains(sonyLink.phase) { sonyLink.findAndConnect() }
+            sonyLink.autoScanOnce()     // v39: no address stored yet: SCAN once by itself
         }
         updateSonyKey()
     }
@@ -1923,6 +1925,14 @@ extension Viewer {
         return (true, "")
     }
     var sony: SonyLink { sonyLink }
+    /// v39: the Sony overlay's tab and visibility (POST /sony/tab {tab, open}, GET /sony/tab)
+    func apiSonyTab(_ name: String?, open: Bool?, search: String? = nil) -> [String: Any]? {
+        if let open, open == sonyPanel.isHidden { setSony(open, connect: false) }
+        if let name { guard let t = SonyTab.named(name) else { return nil }; sonyPanel.select(t) }
+        if let search { sonyPanel.setSearch(search) }
+        return ["tab": sonyPanel.tab.rawValue, "title": sonyPanel.tab.title, "open": !sonyPanel.isHidden, "search": sonyPanel.searchText,
+                "tabs": SonyTab.allCases.map(\.rawValue)]
+    }
 
     private var recordingFPS: Int32 {
         let live = Int32(max(1, min(120, measuredFPS.rounded())))

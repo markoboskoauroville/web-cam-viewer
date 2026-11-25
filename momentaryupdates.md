@@ -1,5 +1,9 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v39, the Sony overlay: SCAN next to the address, the settings in tabs):** Marko: *"Upgrade the camera control from the app. It needs to have next to the IP address scan. So it finds a camera automatically, and all the settings should be in the tabs, in different tabs. So they're organized by tabs."*
+  Then, during the build (relayed word for word): *"The code for scanning the network we already have, and now the camera is connected over Wi Fi, so you can test this. We have a Mantra scanner, LAN scanner available."*
+  And: *"Also, search engine for settings so I can filter settings and get the right settings on the screen."*
+
 **25.11.2026 (v36, the SYNC panel in frames, milliseconds and samples, custom presets):** Marko: *"A small side surgery for the app to add the custom delay for sync. So it can be expressed in frames, milliseconds, and samples. In the same menu, when there are already predefined syncs for my devices. It will be great if you can have also custom one for future."*
   And on the tests during calls: *"Please ignore this rule with Zoom call forever."* (no more waiting for a Zoom call to end before installs and tests; a running take is still never interrupted)
 

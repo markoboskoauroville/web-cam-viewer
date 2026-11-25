@@ -114,6 +114,8 @@ final class SonyLink {
 
     private func findNow(connectAfter: Bool) {
         if link != nil { return }
+        let road = self.road                                  // v39: AUTO, WI-FI only or USB only
+        if road != "usb" {
         set(.searching, "looking for the Sony on the network…")
         var locs = SonySSDP.search(seconds: 4, log: say)
         if let last = UserDefaults.standard.string(forKey: "sony.location"), !locs.contains(last) { locs.append(last) }
@@ -137,11 +139,12 @@ final class SonyLink {
                 proceed(SonyFound(ip: addr, location: "", model: savedModel.isEmpty ? "Sony" : savedModel, name: "Sony", ssh: true), connectAfter: connectAfter); return
             }
         }
+        }
         // v23: Wi-Fi gave no road. Measure every stage, then the cable: free = connect over USB, held = say by whom
         let d = SonyDiagnosis.run(address: addr)
         ui { self.diagnosis = d }
         d.lines.forEach { say($0) }
-        if let u = d.usb, !u.heldByOther, connectAfter { connectUSB(); return }
+        if road != "wifi", let u = d.usb, !u.heldByOther, connectAfter { connectUSB(); return }
         set(d.usb?.heldByOther == true ? .usbBusy : .notFound, d.verdict)
         ui { self.watchedUSB = Self.usbSignature(d.usb) }
     }
@@ -294,6 +297,11 @@ final class SonyLink {
             try startSession(p)
             ui { self.transport = "Wi-Fi" }
             set(.connected, "\(f.model) connected over Wi-Fi")
+            // v39: the address that worked and this body's MAC, preferred by the next SCAN
+            if f.ip != "127.0.0.1" {
+                SonyScan.lastGood = f.ip
+                if let m = SonyDiagnosis.arp(f.ip) { SonyScan.rememberedMac = m }
+            }
         } catch {
             link?.close(); link = nil; tunnel.close()
             set(.failed, "\(error)")
@@ -527,6 +535,81 @@ final class SonyLink {
         }
     }
 
+    // MARK: v39, SCAN: finds the camera on the network and the cable (SonyScan), fills the address with the best one
+    let scanner = SonyScan()
+    private var autoScanned = false
+
+    /// the road CONNECT takes: "auto" (Wi-Fi, then the cable), "wifi" (only the network), "usb" (only the cable)
+    var road: String {
+        get { UserDefaults.standard.string(forKey: "sony.road") ?? "auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "sony.road"); onChange?() }
+    }
+
+    /// main thread
+    func scan(_ done: (() -> Void)? = nil) {
+        scanner.onChange = { [weak self] in self?.onChange?() }
+        let mine = connected && transport == "Wi-Fi" ? found?.ip : nil
+        scanner.start(saved: savedAddress, skipPTP: mine) { [weak self] in
+            guard let self else { return }
+            if let b = self.scanner.best, !self.connected || self.transport != "Wi-Fi" {
+                if b.address != self.savedAddress { self.say("SCAN: the address is now \(b.address) (was \(self.savedAddress.isEmpty ? "empty" : self.savedAddress))") }
+                self.savedAddress = b.address
+                if b.remembered || b.ptpVerified, let m = b.mac { SonyScan.rememberedMac = m }
+            }
+            self.onChange?()
+            // the staged check follows the new address (only while nothing is connected)
+            if !self.connected && self.phase != .connecting && self.phase != .searching { self.check { done?() } } else { done?() }
+        }
+    }
+    /// the overlay opened with no address stored: one SCAN by itself, once per launch
+    func autoScanOnce() {
+        guard !autoScanned, savedAddress.isEmpty, scanner.state != .running else { return }
+        autoScanned = true
+        scan()
+    }
+    /// a candidate chosen in the SCAN pop-up (or POST /sony/scan {choose})
+    func choose(_ address: String) {
+        guard !address.isEmpty else { return }
+        if address == "USB" { road = "usb" } else { savedAddress = address; if road == "usb" { road = "auto" } }
+        say("chosen: \(address)")
+        onChange?()
+    }
+
+    // MARK: v39, every setting by tab (GET /sony/props)
+    func propJSON(_ c: UInt16) -> [String: Any]? {
+        guard let p = props[c] else { return nil }
+        var d: [String: Any] = ["code": sonyHex(c), "name": SonyLabels.name(c), "value": p.value,
+                                "label": SonyLabels.label(c, p.value, type: p.type), "settable": p.settable,
+                                "getSet": Int(p.getSet), "enabled": Int(p.enabled), "form": Int(p.form),
+                                "options": p.options.map { SonyLabels.label(c, $0, type: p.type) }]
+        if let s = p.string { d["text"] = s }
+        if p.form == 1 { d["range"] = ["min": p.rangeMin, "max": p.rangeMax, "step": p.rangeStep] }
+        return d
+    }
+    func apiProps(query: String? = nil) -> [String: Any] {
+        var groups: [[String: Any]] = []
+        if let q = query, !SonyTab.words(q).isEmpty {
+            // the same filter as the overlay's SEARCH SETTINGS, grouped by the tab each hit lives in
+            let hit = SonyTab.search(q, props)
+            for t in SonyTab.allCases where t != .connect {
+                let cards = hit.cards.filter { SonyTab.of($0) == t }, facts = hit.facts.filter { SonyTab.of($0) == t }
+                if cards.isEmpty && facts.isEmpty { continue }
+                groups.append(["tab": t.rawValue, "title": t.title, "controls": cards.compactMap(propJSON),
+                               "facts": facts.compactMap(propJSON), "count": cards.count])
+            }
+            return ["connected": connected, "query": q, "matches": hit.cards.count + hit.facts.count, "groups": groups,
+                    "settings": props.count]
+        }
+        for t in SonyTab.allCases where t != .connect {
+            let cards = SonyTab.cards(t, props), facts = SonyTab.facts(t, props)
+            groups.append(["tab": t.rawValue, "title": t.title, "controls": cards.compactMap(propJSON),
+                           "facts": facts.compactMap(propJSON), "count": cards.count])
+        }
+        return ["connected": connected, "transport": transport, "model": orNull(found?.model), "tab": SonyTab.saved.rawValue,
+                "tabs": SonyTab.allCases.map(\.rawValue), "groups": groups, "settings": props.count,
+                "settable": props.values.filter { $0.settable }.count]
+    }
+
     // MARK: v23, the local API (GET /sony/status, POST /sony/connect|disconnect|rec|set|check|takecontrol)
     func apiStatus() -> [String: Any] {
         func lab(_ c: UInt16) -> Any { orNull(props[c].map { SonyLabels.label(c, $0.value, type: $0.type) }) }
@@ -536,7 +619,10 @@ final class SonyLink {
                 "rec": recState, "battery": lab(0xD218), "iso": lab(0xD21E), "shutter": lab(0xD20D), "fnumber": lab(0x5007),
                 "pictureProfile": orNull(props[0xD23F].map { SonyLabels.ppShort($0.value) }),
                 "settings": props.count, "settable": props.values.filter { $0.settable }.count, "busy": orNull(busy),
-                "diagnosis": orNull(diagnosis?.json), "log": Array(log.suffix(10))]
+                "diagnosis": orNull(diagnosis?.json), "log": Array(log.suffix(10)),
+                "road": road, "savedAddress": savedAddress,
+                "scan": ["state": scanner.state.rawValue, "stage": scanner.stage, "address": orNull(scanner.best?.address),
+                         "usb": orNull(scanner.usb?.title), "candidates": scanner.candidates.count]]
     }
 
     /// the current value of a setting as the camera last reported it, and every label it offers now

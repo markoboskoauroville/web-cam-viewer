@@ -33,6 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Webcam Recorder shows the picture of the camera you choose.</string>
 <key>NSCameraUseContinuityCameraDeviceType</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>Webcam Recorder finds and controls your Sony camera on the local network (SCAN, PTP/IP).</string>
 <key>NSMicrophoneUsageDescription</key><string>Webcam Recorder shows the level of the sound input and records it with the picture.</string>
 </dict></plist>
 PL
