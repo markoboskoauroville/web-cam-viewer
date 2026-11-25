@@ -6,6 +6,8 @@
 
 **25.11.2026 (v29):** Marko: *"Please also remove the slice from the name of the video capture. Just make it, say, without slice. Removing what's unnecessary."*
 
+**25.11.2026 (v29):** Marko: *"Flickering is only happening in vertical slice not in normal view."*
+
 **25.11.2026 (v28):** Marko: *"Please debug my application, a webcam recorder. Right now, it's opened. So I asked you to open Sony Imaging Edge remote, and it is opened up. It's already here. It's online, but the message is kind of persistent on the screen."*
   Status 25.11.2026: done in v28 (the stuck text was "Opening Sony Imaging Edge Remote…"; stale and false Sony verdicts fixed; see TAKEOVER).
 
