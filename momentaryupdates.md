@@ -1,5 +1,8 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v32 = VC-1, the picture into the OBS Virtual Camera):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline by taking the source code from a BlackHole virtual audio device I have here or use BlackHole as such. During that, you need a composite for plugin delays so my students always see me playing in sync."*
+  And on the camera's name: *"We are not going to use paid Apple account for now, so the name states obvious with your camera."* So in Zoom the camera is "OBS Virtual Camera". v32 = the video side (VCAM key, the picture into the OBS sink, the video hold of the composite delay); the audio driver is VC-2 (its own repo), PatchWork in the chain v33.
+
 **25.11.2026 (VC-2, the Mantra VirtualCam audio driver):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline by taking the source code from a BlackHole virtual audio device I have here or use BlackHole as such. During that, you need a composite for plugin delays so my students always see me playing in sync."*
   Decisions already made: the camera is shown as "OBS Virtual Camera" (no paid Apple account); the microphone is named "Mantra VirtualCam". VC-2 = the driver, its own public repo, built only on GitHub Actions (docs/VIRTUALCAM_BUILD.md).
 

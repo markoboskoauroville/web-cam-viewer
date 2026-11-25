@@ -63,6 +63,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var lastScratchFormat: CMFormatDescription?  // capture queue
     // v21: the SONY key and its overlay (our own PTP control of the α7 V over Wi-Fi)
     private let sonyKey = NSButton()
+    // v32: VCAM, the picture into the OBS Virtual Camera (VirtualCam.swift, docs/VIRTUALCAM_PLAN.md VC-1)
+    private let vcamKey = NSButton()
+    private let vcamNote = NSTextField(wrappingLabelWithString: "")
+    let vcam = VirtualCam()
     private let sonyLink = SonyLink()
     private lazy var sonyPanel = SonyPanel(link: sonyLink)
     private var sonyTop: NSLayoutConstraint!
@@ -175,6 +179,9 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         nc.addObserver(self, selector: #selector(appActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         askAccess()
         api = ApiServer(viewer: self); api?.start()
+        vcam.onChange = { [weak self] in self?.updateVcamKey() }
+        vcam.cameraID = wantedID
+        if UserDefaults.standard.bool(forKey: VirtualCam.onKey) && !test { vcam.setOn(true, auto: true) }
         // no frame from the chosen camera for 3 s while it should run: open it again (another app or the keeper may
         // have held it when it was chosen)
         watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkFrames() }
@@ -355,6 +362,23 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         sonyPanel.onClose = { [weak self] in self?.setSony(false) }
         updateSonyKey()
 
+        // v32: VCAM left of SONY: the picture as chosen into the OBS Virtual Camera (remembered); green ● while feeding
+        vcamKey.translatesAutoresizingMaskIntoConstraints = false
+        vcamKey.isBordered = false
+        vcamKey.target = self; vcamKey.action = #selector(vcamTapped)
+        vcamKey.setAccessibilityIdentifier("vcam")
+        vcamKey.setContentHuggingPriority(.required, for: .horizontal)
+        vcamKey.setContentCompressionResistancePriority(.required, for: .horizontal)
+        vcamNote.translatesAutoresizingMaskIntoConstraints = false
+        vcamNote.isHidden = true
+        vcamNote.textColor = NSColor(srgbRed: 1, green: 0.42, blue: 0.38, alpha: 1)   // calm red, no box
+        vcamNote.font = .systemFont(ofSize: 12, weight: .semibold)
+        vcamNote.alignment = .right
+        let vsh = NSShadow(); vsh.shadowColor = .black; vsh.shadowBlurRadius = 3; vsh.shadowOffset = .zero
+        vcamNote.shadow = vsh
+        vcamNote.setAccessibilityIdentifier("vcam-note")
+        updateVcamKey()
+
         // v30: SYNC beside the sound menu: "SYNC +72" = the chosen input is held back 72 ms to sit on the camera's frame
         syncKey.translatesAutoresizingMaskIntoConstraints = false
         syncKey.isBordered = false
@@ -432,6 +456,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         bar.addSubview(snapKey)
         bar.addSubview(folderKey)
         bar.addSubview(sonyKey)
+        bar.addSubview(vcamKey)
 
         picture.translatesAutoresizingMaskIntoConstraints = false
         picture.wantsLayer = true
@@ -565,7 +590,10 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             sonyKey.trailingAnchor.constraint(equalTo: folderKey.leadingAnchor, constant: -4),
             sonyKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             sonyKey.heightAnchor.constraint(equalToConstant: 30), sonyKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            permissions.trailingAnchor.constraint(equalTo: sonyKey.leadingAnchor, constant: -8),
+            vcamKey.trailingAnchor.constraint(equalTo: sonyKey.leadingAnchor, constant: -4),
+            vcamKey.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            vcamKey.heightAnchor.constraint(equalToConstant: 30), vcamKey.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            permissions.trailingAnchor.constraint(equalTo: vcamKey.leadingAnchor, constant: -8),
             permissions.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             picture.topAnchor.constraint(equalTo: content.topAnchor),
@@ -587,6 +615,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         meterTop = meter.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
         meterTop.isActive = true
         content.addSubview(soundBanner)   // after the Sony overlay, so it stays visible over it
+        content.addSubview(vcamNote)
+        NSLayoutConstraint.activate([
+            vcamNote.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -56),
+            vcamNote.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            vcamNote.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, multiplier: 0.6)])
         NSLayoutConstraint.activate([
             soundBanner.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight + 6),
             soundBanner.centerXAnchor.constraint(equalTo: content.centerXAnchor),
@@ -725,6 +758,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     /// stops a running take cleanly (the file is closed), then the session
     func stop(_ done: (() -> Void)? = nil) {
         api?.stop()
+        vcam.shutdown()   // v32: the sink stream stopped, OBS Virtual Camera goes back to its placeholder
         sonyLink.shutdown()
         statsTimer?.invalidate(); statsTimer = nil
         var r: Recorder?
@@ -1033,6 +1067,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     private func updateFeedStats() {
         updateSyncKey()
+        vcam.cameraID = current?.uniqueID ?? wantedID
+        updateVcamKey()
         guard current != nil else { return }
         var frames = 0, drops = 0, width = 0, height = 0, format = "—"
         captureQueue.sync {
@@ -1566,6 +1602,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 capturedWidth = CVPixelBufferGetWidth(pb)
                 capturedHeight = CVPixelBufferGetHeight(pb)
                 capturedPixelFormat = Self.pixelFormatName(CVPixelBufferGetPixelFormatType(pb))
+                // v32: VCAM gets the camera's own frame (a retained buffer, at most two in flight, O(1) here)
+                vcam.submit(pb, pts: CMSampleBufferGetPresentationTimeStamp(sb), slice: sliceOn)
             }
             if sliceOn, let v = slicer.slice(sb) {
                 // v5: the vertical frame is what is shown and what is recorded; ASAP display, the recorder keeps the stamps
@@ -1801,6 +1839,7 @@ extension Viewer {
                 "takeSoundSeconds": liveRecorder?.audioSecondsWritten ?? 0,
                 "sync": apiSyncStatus(),
                 "gain": apiGainStatus(),
+                "vcam": vcam.summary.state,   // v32: off | feeding | conflict | problem | waiting (GET /virtualcam/status)
                 "sony": sonyLink.apiStatus()]
     }
 
@@ -1925,7 +1964,7 @@ extension Viewer {
             .foregroundColor: c == nil ? NSColor.secondaryLabelColor : NSColor.white]
         let full = "SYNC" + (number.map { " " + $0 } ?? "")
         let fullWidth = ceil(NSAttributedString(string: full, attributes: attrs).size().width) + 10
-        let right = (permissions.isHidden ? sonyKey.frame.minX : permissions.frame.minX) - 10
+        let right = (permissions.isHidden ? vcamKey.frame.minX : permissions.frame.minX) - 10
         let needed = 10 + 118 + 10 + 118 + 10 + 26 + 10 + fullWidth + 10 + 30 + 10 + qualityKey.intrinsicContentSize.width
         let title = (right <= 0 || needed <= right) ? full : "SYNC"
         let old = syncKey.attributedTitle
@@ -2294,5 +2333,66 @@ extension Viewer {
             if !autoGain.running { toggleAutoGain() }
         }
         return (true, "")
+    }
+}
+
+// MARK: v32, VCAM: the picture into the OBS Virtual Camera (VirtualCam.swift)
+extension Viewer {
+    @objc fileprivate func vcamTapped() { setVcam(!UserDefaults.standard.bool(forKey: VirtualCam.onKey)) }
+
+    func setVcam(_ on: Bool, _ done: (() -> Void)? = nil) {
+        UserDefaults.standard.set(on, forKey: VirtualCam.onKey)
+        updateVcamKey()
+        vcam.setOn(on) { [weak self] in self?.updateVcamKey(); done?() }
+    }
+
+    func updateVcamKey() {
+        let wanted = UserDefaults.standard.bool(forKey: VirtualCam.onKey)
+        let sum = vcam.summary
+        let red = NSColor(srgbRed: 1, green: 0.42, blue: 0.38, alpha: 1)
+        let (title, color): (String, NSColor) = {
+            switch sum.state {
+            case "feeding": return ("VCAM ●", .systemGreen)
+            case "conflict", "problem": return ("VCAM ●", red)
+            case "waiting": return ("VCAM", .systemOrange)
+            default: return ("VCAM", wanted ? .white : .secondaryLabelColor)
+            }
+        }()
+        let old = vcamKey.attributedTitle
+        let oldColor = old.length > 0 ? old.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil
+        if old.string != title || oldColor != color {
+            vcamKey.attributedTitle = NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: color])
+        }
+        vcamKey.setAccessibilityTitle("VCAM")
+        let value: String
+        switch sum.state {
+        case "feeding": value = "on, feeding OBS Virtual Camera"
+        case "conflict": value = "on, another program feeds OBS Virtual Camera"
+        case "problem": value = "on, not feeding: " + (sum.text ?? "")
+        case "waiting": value = "on, waiting: " + (sum.text ?? "")
+        default: value = "off"
+        }
+        vcamKey.setAccessibilityValue(value)
+        vcamKey.toolTip = "VCAM: the picture as chosen (the 9:16 slice pillarboxed) into the OBS Virtual Camera, 1920x1080 at 60 fps; "
+            + "in Zoom pick Camera → OBS Virtual Camera. OBS does not have to run; do not press OBS's own Start Virtual Camera while VCAM is on. "
+            + "Best capture mode for it: 1920x1080 · yuvs · 60. Now: \(value)."
+        let text = wanted ? sum.text : nil
+        if vcamNote.stringValue != (text ?? "") { vcamNote.stringValue = text ?? "" }
+        vcamNote.isHidden = text == nil
+    }
+
+    func apiVirtualCam() -> [String: Any] {
+        var s = vcam.status(wanted: UserDefaults.standard.bool(forKey: VirtualCam.onKey))
+        s["videoID"] = nn(current?.uniqueID ?? wantedID)
+        s["slice"] = wantedID.map { UserDefaults.standard.bool(forKey: "slice." + $0) } ?? false
+        s["captureMode"] = "\(feedWidth)x\(feedHeight) \(feedPixelFormat) \(fps)"
+        return s
+    }
+
+    /// POST /virtualcam {on?, extraDelayMs?, maxHoldMs?, trimMs?, stamp?}
+    func apiSetVirtualCam(_ b: [String: Any], _ done: @escaping (String?) -> Void) {
+        if let err = vcam.configure(b) { done(err); return }
+        if let on = b["on"] as? Bool { setVcam(on) { done(nil) } } else { done(nil) }
     }
 }

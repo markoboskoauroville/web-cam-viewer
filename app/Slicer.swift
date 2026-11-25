@@ -83,7 +83,7 @@ final class Slicer {
         }
     }
 
-    private static func lanczos(_ img: CIImage, _ scale: CGFloat) -> CIImage {
+    static func lanczos(_ img: CIImage, _ scale: CGFloat) -> CIImage {
         guard let f = CIFilter(name: "CILanczosScaleTransform") else { return img.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
         f.setValue(img, forKey: kCIInputImageKey)
         f.setValue(scale, forKey: kCIInputScaleKey)
