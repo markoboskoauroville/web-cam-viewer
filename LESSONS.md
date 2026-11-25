@@ -241,3 +241,36 @@
     Marko joined a Zoom call on it (and a ZZTEST take was running in front of him). Before a test that changes what
     VCAM sends, check that no one reads OBS Virtual Camera (zoom.us running = assume he is in a call), and put the
     picture back the moment a test ends.
+63. **The composite delay, as built (v34-v36, 25.11.2026).** All on the host clock, against the camera's own HDMI sound.
+    `A = −SYNC(mic) + L + Lapp + Ldrv`, `V = Vpath − sync.videoDelayMs`, `video_hold = max(0, A − V + trim)`,
+    `audio_hold = max(0, V − A − trim)`; the sound is written into the Feed at mic stamp + Lapp + L + audio_hold.
+    SYNC > 0 (the RØDE +72.5, External Microphone +74.6) means the mic hears EARLIER, so its micOffset is negative.
+    Example RØDE, V 80.5, Lapp 30, L 0: A = −42.5, audio_hold 123.0, sound 153 ms after its stamp = 72.5 + 80.5, picture
+    not held. UGREEN (A) (the reference, SYNC 0): A = 30, audio_hold 50.5, sound 80.5 ms. With PatchWork L 150 and the
+    RØDE: A = 107.5, video_hold 27, sound 180 ms, picture 107.5 ms. Two sign traps: trim > 0 (sound later than the
+    picture in the clap test) is subtracted on the sound side (VIRTUALCAM_PLAN §7 had + trim); a camera's
+    `sync.videoDelayMs` (hold its picture back) shortens V (VIRTUALCAM_BUILD §5 had it adding). Both docs corrected.
+64. **The card's pictures arrive 45-80 ms after their stamps: the live picture must leave on a steady path (v35).** v34
+    sent each frame as soon as it was converted; the sound is planned to the sample, so the picture/sound offset at the
+    readers spread 30 ms (median −4.4 ms, −18.8 … +10.8) although the median was right. Every spread was on the picture
+    side (picture path 41.8-72.3 ms per flash, sound path 60.2-62.6 ms). v35: with Zoom's mic = Mantra VirtualCam every
+    frame leaves at capture + steady + hold (steady = p95 of capture → ready + 2 ms, 80.5 ms at 2560x1440 30), the buffer
+    carries that planned time as its PTS, and the send timer runs at 500 Hz. Result (15 flashes): −1.02 ms, spread 0.0 by
+    the readers' sample times; by arrival at the reader +12.5 ms median (4-31 ms: the OBS extension's own delivery).
+    Cost: about 20 ms more latency on both sides.
+65. **Nothing on the capture queue may wait on Core Audio (v36).** One v35 test take hung after 1.07 s: ffmpeg's flv
+    demuxer was held back waiting for sound, both sound FIFOs were empty, the capture queue was blocked inside
+    appendVideo writing the 64 KB video pipe (so no sound could be delivered any more), and the main thread hung in
+    updateFeedStats' captureQueue.sync. The app needed kill -9. Not reproduced in 5 takes after (VMIC on and off). Any
+    stall of the capture queue can start this circle, and VMIC's submit() took a lock that the control queue held during
+    an 'mvst' HAL read: v36 reads the driver outside that lock. The circle itself (video written synchronously on the
+    capture queue while ffmpeg waits for sound) is older than VMIC and still possible: a watchdog on the video pipe write
+    (or writing video on its own queue) is the real fix, in Recorder.swift.
+66. **Smooth the measured path, and hold the sound with a hysteresis.** VCAM's Vpath median wobbles ±1 ms; with a 1 ms
+    hysteresis (v34) the composite moved the sound 84 times in 65 s (1764 samples dropped, 1726 repeated). v35: Vpath
+    smoothed over about 5 s, a change applied only above 2 ms; a change over 3 ms is a 5 ms crossfade, a smaller one a
+    slew of one sample per 5.3 ms cycle.
+67. **The real clock drift of the External Microphone is about −2.8 ppm (≈ −10 ms an hour) against the host clock**
+    (VMIC's arrival envelope, 10 s windows; the stamps themselves show none, LESSONS 49). VMIC follows it by single
+    sample drops/repeats. Its IO proc costs 2 µs a cycle (max ≈ 10 µs at 256 frames); app CPU 38-39 % with or without
+    VMIC, coreaudiod +1-2 %. A 96 kHz input is averaged in pairs into the 48 kHz Feed (v35).

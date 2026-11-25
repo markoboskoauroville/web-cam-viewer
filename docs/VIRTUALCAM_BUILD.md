@@ -203,3 +203,31 @@ recorder moves the mic by its SYNC value against the picture), plus the plug-in 
 limiter of 85 ms in PatchWork the picture waits instead. Zoom's own extra latency is the same for both streams it
 receives as a pair only up to its own pipelines; one clap test in a Zoom local recording measures the rest and sets
 `virtualcam.trimMs` (VC-6). extraDelayMs (v32 API) is where the audio side plugs its A in.
+
+## 9. As built in the app (v34-v36, 25.11.2026)
+
+- **VMIC** (app/VirtualMic.swift): the chosen sound input, after its device gain and the digital gain of v31, mixed to
+  mono (the mean of its channels; a 96 kHz input averaged in pairs) and written to both channels of the Feed by an IO
+  proc (256 frames, no allocation, one trylock). The sample captured at true time c goes out at host time
+  c + Lapp + L + audio_hold. Drift: the lower envelope of (arrival − stamp) in 10 s windows, followed by one-sample
+  drops/repeats; a jump of the plan over 3 ms is a 5 ms crossfade; silence before the start, never old sound.
+  `GET /virtualmic/status`, `POST /virtualmic {on, processorLatencyMs (L, for PatchWork), trimMs, flash, composite}`.
+- **Composite** (the same file): `A = −SYNC + L + Lapp + Ldrv`, `V = Vpath − sync.videoDelayMs` (Vpath = VCAM's measured
+  capture → enqueue without its hold, smoothed ~5 s), `video_hold = max(0, A − V + trim)`, `audio_hold = max(0, V − A −
+  trim)`, applied with a 2 ms hysteresis. Lapp is measured (p98 of arrival − stamp + how far ahead the IO proc writes +
+  3 ms) and grows by 2 ms on an underrun. With Zoom's mic = Mantra VirtualCam (the default) VCAM holds `video_hold` and
+  sends every frame on a steady path (p95 of its own path + 2 ms), with the planned time as the buffer's PTS (LESSONS 64).
+- **Worked examples** (V 80.5 ms, Lapp 30 ms, trim 0): RØDE SYNC +72.5 → A −42.5, audio_hold 123.0, the sound 153 ms
+  after its stamp, the picture not held. UGREEN (A) (SYNC 0) → A 30, audio_hold 50.5, the sound 80.5 ms. RØDE with a
+  PatchWork latency of 150 ms → A 107.5, video_hold 27 ms, the sound 180 ms, the picture 107.5 ms.
+- **Measured at the readers** (tools/vcam_av_check.py flash: VCAM flashes a white frame, VMIC clicks at the same
+  moment of the picture's clock; a reader of both virtual devices): without the composite the picture came 126 ms after
+  the sound (v35; 97 ms on v34 before the steady path), with it −1.0 ms (15 of 15 flashes, spread 0.0 ms by sample
+  times; by arrival at the reader +12.5 ms median). The audio chain alone (tools/vcam_av_check.py adam, chirps from the
+  ADAM): Mantra VirtualCam − raw mic = 134.7 / 135.8 ms against 134.9 planned.
+- **The clap test in Zoom (VC-6, Marko's hands):** Zoom → Settings → Video → Camera "OBS Virtual Camera"; Audio →
+  Microphone "Mantra VirtualCam", Original sound for musicians on, automatic volume off; VCAM and VMIC green in the app.
+  Start a meeting alone, Record → Record on this Computer, clap (or hit the drum) five times, a second apart, in front of
+  the α7 V, stop, end. In the recording, read the time of each clap's picture (hands meet) and sound (onset); the median
+  of sound − picture in ms is the trim: `curl -X POST 127.0.0.1:8867/virtualcam -d '{"trimMs": <ms>}'` (positive = the
+  sound was later; the app then holds the sound less or the picture more). Repeat once to check.

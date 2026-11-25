@@ -1,5 +1,35 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v34 = VMIC (the live sound into the Mantra VirtualCam microphone) + the composite delay; v35 = a
+steady picture path for it; v36 = VMIC never holds the capture queue on Core Audio.** Marko (momentaryupdates.md): "how to
+get sound which is processed with the same application webcam recorder and then have it in sync ... in live stream".
+- **VMIC key** left of VCAM (AX title VMIC; green "VMIC ●" feeding, orange waiting for sound, red ● problem, the red
+  note shared with VCAM's bottom right), remembered `virtualmic.on`. app/VirtualMic.swift: the chosen input (gain, SYNC)
+  mono on both channels into the hidden "Mantra VirtualCam Feed" (found by UID), IO proc 256 frames, host-time ring,
+  drift by single-sample drop/repeat from the arrival envelope, 5 ms crossfades, underrun/too-old counters, 'mvst' 4/s.
+  Driver missing = red "Mantra VirtualCam driver not installed ..." and nothing written (never installs it).
+- **Composite** (VIRTUALCAM_BUILD §5/§9, LESSONS 63): `video_hold = max(0, A − V + trim)`, `audio_hold = max(0, V − A −
+  trim)`, A = −SYNC + L + Lapp + Ldrv, V = VCAM's measured path − videoDelay. L = `POST /virtualmic {processorLatencyMs}`
+  (0 now; PatchWork fills it next). Zoom mic default is now Mantra VirtualCam (`zoomMic` "raw" = the chosen input).
+  With it VCAM sends every frame on a steady path (p95 + 2 ms, 80.5 ms at 2560x1440 30) with its planned PTS (LESSONS 64).
+- **API:** `GET /virtualmic/status` (state, route, feedFormat, input, soundDelayMs, audioHoldMs, drift{ppm,
+  correctionMs, samplesDropped, samplesRepeated}, jumps, underruns, tooOldFrames, aheadMs, ioProcUs, driver{fillMs,
+  silentReads, overloads, gapFrames, micClients, feedClients}, composite{...every term...}); `POST /virtualmic {on,
+  processorLatencyMs, trimMs, flash (test), composite (test: false = no holds)}`; /status `vmic` + `virtualmic`;
+  /virtualcam/status has `composite`, `videoHoldMs`, `steadyPathMs`, `VpathMs`, `flash`.
+- **Measured (installed v35, External Microphone 96 kHz, SYNC +74.6, API only, no Zoom call):** tools/vcam_av_check.py
+  flash: picture − sound at the readers −1.0 ms (15/15, spread 0.0 ms by sample times; +12.5 ms median by arrival,
+  4-31 ms, the OBS extension's delivery); without the composite +126 ms (v34 +97 ms; v34 with composite −4.4 ms median
+  but 30 ms spread, LESSONS 64). adam (ADAM chirps): VMIC − raw = 134.7 / 135.8 ms vs 134.9 planned. Drift −2.7…−2.9 ppm.
+  IO proc 2 µs mean / 10 µs max; CPU 38-39 % with or without VMIC, coreaudiod +1-2 %. Takes with VMIC on and off pass
+  check_take (12 s ×2, 9 s ×3).
+- **Open / not verified:** the v36 install and its re-measure (see below); Zoom itself (the clap test, VIRTUALCAM_BUILD §9,
+  sets `virtualcam.trimMs`); the RØDE as the input (Marko had External Microphone chosen; not switched); a 30-min drift
+  run (the poller hung with the app, LESSONS 65); one take hang on v35 (LESSONS 65: the Recorder's synchronous video pipe
+  write can deadlock with ffmpeg; v36 removes VMIC's lock as a trigger, the Recorder fix is still to do); kill -9 take
+  with VMIC on; the bar at minimum width.
+
+
 **State 25.11.2026: v32 = VCAM (VC-1 of Mantra VirtualCam), v33 = Zoom mic in the VCAM status + the bar's "2560/30".**
 Marko (momentaryupdates.md): "I want that our app web cam recorder stream through OBS virtual camera with all audio and
 delay processing ... a composite for plugin delays so my students always see me playing in sync."

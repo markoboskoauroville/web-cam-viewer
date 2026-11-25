@@ -404,6 +404,12 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         syncKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
         syncPanel.onStep = { [weak self] d in self?.stepSync(d) }
         syncPanel.onReset = { [weak self] in self?.resetSync() }
+        syncPanel.onSetValue = { [weak self] v in self?.setSyncValue(v) }
+        syncPanel.onUnit = { u in Sync.unit = u }
+        syncPanel.onPresetApply = { [weak self] id in _ = self?.applySyncPreset(id) }
+        syncPanel.onPresetSave = { [weak self] in self?.askSavePreset() }
+        syncPanel.onPresetRename = { [weak self] id in self?.askRenamePreset(id) }
+        syncPanel.onPresetDelete = { id in _ = Sync.deletePreset(id) }
         syncPanel.onClose = { [weak self] in self?.setSync(false) }
         updateSyncKey()
 
@@ -2003,7 +2009,60 @@ extension Viewer {
 
     fileprivate func stepSync(_ d: Double) {
         guard let c = chosenSync, !c.reference else { return }
-        Sync.setAudio(c.uid, c.ms + d)
+        let u = Sync.unit, fps = syncFPS, rate = syncRate(currentMic)
+        Sync.setAudio(c.uid, Sync.fromUnit(Sync.toUnit(c.ms, u, fps: fps, rate: rate) + d, u, fps: fps, rate: rate))
+    }
+
+    // v36: the delay in ms, frames (the record frame rate) and samples (the input's own rate), and presets
+    var syncFPS: Double { Double(max(1, recordingFPS)) }
+    func syncRate(_ d: AVCaptureDevice?) -> Double {
+        d?.activeFormat.formatDescription.audioStreamBasicDescription.map { $0.mSampleRate }.flatMap { $0 > 0 ? $0 : nil } ?? 48000
+    }
+    fileprivate func setSyncValue(_ v: Double) {
+        guard let c = chosenSync, !c.reference else { return }
+        Sync.setAudio(c.uid, Sync.fromUnit(v, Sync.unit, fps: syncFPS, rate: syncRate(currentMic)))
+    }
+    fileprivate func applySyncPreset(_ id: String) -> Bool {
+        guard let c = chosenSync, !c.reference, let p = Sync.allPresets.first(where: { $0.id == id }) else { return false }
+        Sync.setAudio(c.uid, p.ms); return true
+    }
+    fileprivate func askSavePreset() {
+        guard let c = chosenSync, !c.reference else { return }
+        let a = NSAlert()
+        a.messageText = "Save \(Sync.text(c.ms)) as a preset"
+        a.informativeText = "A name for it, and whether it is for \(c.name) only or for any sound input."
+        let name = NSTextField(frame: NSRect(x: 0, y: 30, width: 260, height: 24))
+        name.stringValue = c.name + " " + Sync.text(c.ms)
+        name.setAccessibilityTitle("Preset name")
+        let scope = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 24), pullsDown: false)
+        scope.addItems(withTitles: ["Only for \(c.name)", "For any sound input"])
+        scope.setAccessibilityTitle("Preset for")
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 56)); box.addSubview(name); box.addSubview(scope)
+        a.accessoryView = box
+        a.addButton(withTitle: "SAVE"); a.addButton(withTitle: "CANCEL")
+        a.window.initialFirstResponder = name
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let any = scope.indexOfSelectedItem == 1
+        Sync.savePreset(name: name.stringValue.isEmpty ? Sync.text(c.ms) : name.stringValue, ms: c.ms,
+                        device: any ? nil : c.uid, deviceName: any ? nil : c.name)
+    }
+    fileprivate func askRenamePreset(_ id: String) {
+        guard let p = Sync.customPresets.first(where: { $0.id == id }) else { return }
+        let a = NSAlert()
+        a.messageText = "Rename the preset"
+        let name = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        name.stringValue = p.name; name.setAccessibilityTitle("Preset name")
+        a.accessoryView = name
+        a.addButton(withTitle: "RENAME"); a.addButton(withTitle: "CANCEL")
+        a.window.initialFirstResponder = name
+        if a.runModal() == .alertFirstButtonReturn { _ = Sync.renamePreset(id, to: name.stringValue) }
+    }
+    fileprivate var syncPresetsJSON: [[String: Any]] { Sync.allPresets.map { Sync.presetJSON($0) } }
+    fileprivate func syncUnits(_ ms: Double, _ d: AVCaptureDevice?) -> [String: Any] {
+        let fps = syncFPS, rate = syncRate(d)
+        return ["ms": ms, "frames": (Sync.toUnit(ms, .frames, fps: fps, rate: rate) * 10000).rounded() / 10000,
+                "samples": (Sync.toUnit(ms, .samples, fps: fps, rate: rate) * 1000).rounded() / 1000,
+                "fps": fps, "rate": rate, "text": Sync.threeUnits(ms, fps: fps, rate: rate), "unitShown": Sync.unit.rawValue]
     }
 
     fileprivate func resetSync() {
@@ -2047,6 +2106,7 @@ extension Viewer {
                 let m = Sync.measured(uid: c.uid, name: c.name)
                 let how = c.ms >= 0 ? "held back" : "brought earlier"
                 detail = "This input is \(how) \(Sync.text(abs(c.ms))) against the camera's own sound (UGREEN 15389 (A))."
+                    + (c.ms < 0 ? " (A negative value: its sound is LATER than the camera's; live in Zoom the picture waits for it.)" : "")
                     + (m.map { " Measured: \(Sync.text($0.ms)) (\($0.source))." } ?? " Not measured yet: tools/avsync.py measure.")
             }
         }
@@ -2061,8 +2121,14 @@ extension Viewer {
         var footer = "Picture delay of \(current?.localizedName ?? wantedName ?? "the camera") (V): \(Sync.text(video))."
         footer += scratchUID != nil ? " The camera's own sound is kept in every take as track 2 (camera scratch)." : ""
         if isRecording { footer += " A change applies to the next take." }
-        syncPanel.update(SyncPanel.Model(sound: c.map { $0.name + Self.audioTag } ?? "No sound", value: value, detail: detail,
-                                         adjustable: c != nil && c?.reference == false, rows: rows, footer: footer))
+        var model = SyncPanel.Model(sound: c.map { $0.name + Self.audioTag } ?? "No sound", value: value, detail: detail,
+                                    adjustable: c != nil && c?.reference == false, rows: rows, footer: footer)
+        let u = Sync.unit, fps = syncFPS, rate = syncRate(currentMic)
+        model.unit = u
+        model.unitValue = Sync.toUnit(c?.ms ?? 0, u, fps: fps, rate: rate)
+        model.readout = c.map { Sync.threeUnits($0.reference ? 0 : $0.ms, fps: fps, rate: rate) } ?? ""
+        model.presets = Sync.allPresets.map { (id: $0.id, title: Sync.presetText($0), builtIn: $0.builtIn) }
+        syncPanel.update(model)
     }
 
     /// the scratch session holds the camera's own sound while another input is chosen (sync.scratch, default on)
@@ -2091,6 +2157,7 @@ extension Viewer {
     func apiSyncStatus() -> [String: Any] {
         let a = appliedSync()
         return ["audioDelayMs": chosenSync?.ms ?? 0, "videoDelayMs": a.videoMs, "appliedMs": a.audioMs,
+                "units": syncUnits(chosenSync?.ms ?? 0, currentMic),
                 "scratch": scratchUID != nil, "take": nn(liveRecorder?.syncInfo)]
     }
 
@@ -2119,6 +2186,7 @@ extension Viewer {
                 "scratch": ["enabled": UserDefaults.standard.object(forKey: "sync.scratch") as? Bool ?? true,
                             "device": nn(scratchUID), "running": scratchUID != nil] as [String: Any],
                 "recording": isRecording, "appliesTo": isRecording ? "the next take" : "every take from now",
+                "units": syncUnits(c?.ms ?? 0, currentMic), "presets": syncPresetsJSON,
                 "take": nn(liveRecorder?.syncInfo)]
     }
 
@@ -2136,7 +2204,24 @@ extension Viewer {
             guard let uid = (video["uid"] as? String) ?? current?.uniqueID ?? wantedID else { return (false, "no camera") }
             Sync.setVideo(uid, ms)
         }
-        let hasAudio = body["ms"] != nil || body["delta"] != nil || (body["reset"] as? Bool) == true
+        // v36: the panel's unit, and presets
+        if let v = b["view"] as? String { guard let u = Sync.Unit(rawValue: v) else { return (false, "view must be ms, frames or samples") }; Sync.unit = u }
+        if let save = b["presetSave"] as? [String: Any] {
+            let any = (save["device"] as? String)?.lowercased() == "any"
+            guard let name = save["name"] as? String, !name.isEmpty else { return (false, "presetSave needs a name") }
+            let c = chosenSync
+            guard let ms = (save["ms"] as? NSNumber)?.doubleValue ?? c?.ms else { return (false, "no value to save (no sound input)") }
+            if !any && c == nil { return (false, "no sound input chosen: save it for \"any\" device") }
+            Sync.savePreset(name: name, ms: ms, device: any ? nil : c?.uid, deviceName: any ? nil : c?.name)
+        }
+        if let r = b["presetRename"] as? [String: Any] {
+            guard let id = r["id"] as? String, let name = r["name"] as? String, Sync.renamePreset(id, to: name) else { return (false, "no such custom preset (built-in presets cannot be renamed)") }
+        }
+        if let id = b["presetDelete"] as? String, !Sync.deletePreset(id) { return (false, "no such custom preset (built-in presets cannot be deleted)") }
+        if let id = b["presetApply"] as? String {
+            guard applySyncPreset(id) else { return (false, "no such preset, or no sound input that can be moved") }
+        }
+        let hasAudio = body["ms"] != nil || body["delta"] != nil || (body["reset"] as? Bool) == true || body["value"] != nil
         if hasAudio {
             var target: AVCaptureDevice?
             if let uid = body["uid"] as? String { target = mics.first { $0.uniqueID == uid } }
@@ -2150,6 +2235,12 @@ extension Viewer {
             if (body["reset"] as? Bool) == true { ms = Sync.measured(uid: t.uniqueID, name: t.localizedName)?.ms ?? 0 }
             if let v = (body["ms"] as? NSNumber)?.doubleValue { ms = v }
             if let d = (body["delta"] as? NSNumber)?.doubleValue { ms += d }
+            if let v = (body["value"] as? NSNumber)?.doubleValue {   // v36: {unit, value, fps?, rate?}
+                guard let u = Sync.Unit(rawValue: (body["unit"] as? String) ?? "ms") else { return (false, "unit must be ms, frames or samples") }
+                let fps = (body["fps"] as? NSNumber)?.doubleValue ?? syncFPS
+                let rate = (body["rate"] as? NSNumber)?.doubleValue ?? syncRate(t)
+                ms = Sync.fromUnit(v, u, fps: fps, rate: rate)
+            }
             guard abs(ms) <= 1000 else { return (false, "ms must be within ±1000") }
             Sync.setAudio(t.uniqueID, ms)
         }

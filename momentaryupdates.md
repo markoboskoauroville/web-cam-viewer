@@ -1,5 +1,8 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
+**25.11.2026 (v36, the SYNC panel in frames, milliseconds and samples, custom presets):** Marko: *"A small side surgery for the app to add the custom delay for sync. So it can be expressed in frames, milliseconds, and samples. In the same menu, when there are already predefined syncs for my devices. It will be great if you can have also custom one for future."*
+  And on the tests during calls: *"Please ignore this rule with Zoom call forever."* (no more waiting for a Zoom call to end before installs and tests; a running take is still never interrupted)
+
 **25.11.2026 (v34 = VC-3/VC-4, the live sound into the Mantra VirtualCam microphone, the composite delay):** Marko: *"I want that our app web cam recorder stream through OBS virtual camera with all audio and delay processing. You need to also enable Blue Cat PatchWork to be part of the audio pipeline ... During that, you need a composite for plugin delays so my students always see me playing in sync."*
   And: *"I'm in Zoom. I choose my camera as OBS virtual camera. That's fine. I get image. But how to get sound which is processed with the same application webcam recorder and then have it in sync with sound, with images perfectly? That was the issue so far. So we solve this issue in recordings but how to do it in live stream"*
   Then: *"So audio driver is finished, can we test it?"* / *"The driver is installed."*
