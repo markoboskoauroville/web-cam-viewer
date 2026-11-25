@@ -55,7 +55,8 @@ final class VirtualCam {
     private var camID: String?
     private var received = 0, busyDrops = 0, poolDrops = 0, ringDrops = 0, queueFullDrops = 0, skipped = 0
     private var sentTotal = 0, sentUnique = 0
-    private var latencies: [Double] = [], processing: [Double] = []
+    private var latencies: [Double] = [], processing: [Double] = [], arrivals: [Double] = [], converts: [Double] = []
+    private var lastFreshAt = 0.0, lastFreshPTS = 0.0, period = 1.0 / 30
     private var fpsUnique = 0.0, fpsSend = 0.0, fpsAt = 0.0, fpsU0 = 0, fpsS0 = 0
     private var stalledSince: Double?
     private(set) var conflict = false
@@ -189,7 +190,8 @@ final class VirtualCam {
         device = dev; sink = s; queue = qq; format = nil
         let attrs: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                                     kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h,
-                                    kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any]]
+                                    kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+                                    kCVPixelBufferMetalCompatibilityKey as String: true]
         var p: CVPixelBufferPool?
         CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &p)
         lock.lock()
@@ -197,7 +199,7 @@ final class VirtualCam {
         queueCapacity = Int(CMSimpleQueueGetCapacity(qq))
         ring.removeAll(); lastSent = nil; lastSendAt = 0; feeding = true; startedAt = Self.now()
         received = 0; busyDrops = 0; poolDrops = 0; ringDrops = 0; queueFullDrops = 0; skipped = 0; sentTotal = 0; sentUnique = 0
-        latencies.removeAll(); processing.removeAll(); fpsUnique = 0; fpsSend = 0; fpsAt = Self.now(); fpsU0 = 0; fpsS0 = 0
+        latencies.removeAll(); processing.removeAll(); arrivals.removeAll(); converts.removeAll(); lastFreshAt = 0; lastFreshPTS = 0; period = 1.0 / 30; fpsUnique = 0; fpsSend = 0; fpsAt = Self.now(); fpsU0 = 0; fpsS0 = 0
         lock.unlock()
         refreshHold()
         let t = DispatchSource.makeTimerSource(flags: .strict, queue: sendQueue)
@@ -232,16 +234,17 @@ final class VirtualCam {
         guard inFlight < 2 else { busyDrops += 1; lock.unlock(); return }
         inFlight += 1
         let stamp = stampOn
+        let t = CMTimeGetSeconds(pts), arrived = Self.now()
+        arrivals.append((arrived - t) * 1000); if arrivals.count > 120 { arrivals.removeFirst(arrivals.count - 120) }
         lock.unlock()
-        let t = CMTimeGetSeconds(pts)
-        convertQueue.async { self.convert(pb, t, slice, stamp) }
+        convertQueue.async { self.convert(pb, t, arrived, slice, stamp) }
     }
 
     private var ringCapFrames: Int { Int(((capMs + 60) / 1000 * Self.cadence).rounded(.up)) + 3 }   // lock held
 
     /// the frame fitted into the sink's 1920x1080 (aspect kept, black bars, Lanczos), the slice = the same middle 9:16 strip
     /// as Slicer, pillarboxed; one resample from the camera's own pixels
-    private func convert(_ src: CVPixelBuffer, _ t: Double, _ slice: Bool, _ stamp: Bool) {
+    private func convert(_ src: CVPixelBuffer, _ t: Double, _ arrived: Double, _ slice: Bool, _ stamp: Bool) {
         defer { lock.lock(); inFlight -= 1; lock.unlock() }
         lock.lock(); let pool = self.pool; let W = outW, H = outH; let cap = ringCapFrames; lock.unlock()
         guard let pool else { return }
@@ -273,6 +276,7 @@ final class VirtualCam {
         lock.lock()
         ring.append(Frame(pb: out, pts: t, ready: ready))
         processing.append((ready - t) * 1000); if processing.count > 120 { processing.removeFirst(processing.count - 120) }
+        converts.append((ready - arrived) * 1000); if converts.count > 120 { converts.removeFirst(converts.count - 120) }
         while ring.count > cap { ring.removeFirst(); ringDrops += 1 }
         let immediate = holdMs <= 0
         lock.unlock()
@@ -285,13 +289,14 @@ final class VirtualCam {
         let us = UInt64(max(0, t) * 1_000_000) & ((UInt64(1) << 40) - 1)
         var bits: [Bool] = [true, false]
         for i in stride(from: 39, through: 0, by: -1) { bits.append((us >> UInt64(i)) & 1 == 1) }
-        var out = img
+        var px = [UInt8](); px.reserveCapacity(bits.count * 4)
+        for b in bits { let v: UInt8 = b ? 255 : 0; px += [v, v, v, 255] }   // BGRA
+        let row = CIImage(bitmapData: Data(px), bytesPerRow: bits.count * 4, size: CGSize(width: bits.count, height: 1),
+                          format: .BGRA8, colorSpace: nil)
         let s: CGFloat = 24
-        for (i, b) in bits.enumerated() {
-            let r = CGRect(x: CGFloat(i) * s, y: CGFloat(height) - s, width: s, height: s)
-            out = CIImage(color: b ? CIColor.white : CIColor.black).cropped(to: r).composited(over: out)
-        }
-        return out
+        let bar = row.samplingNearest().transformed(by: CGAffineTransform(scaleX: s, y: s))
+            .transformed(by: CGAffineTransform(translationX: 0, y: CGFloat(height) - s))
+        return bar.composited(over: img)
     }
 
     // MARK: frames out (send queue)
@@ -321,8 +326,15 @@ final class VirtualCam {
         var pick: Int?
         for (i, f) in ring.enumerated() where f.pts + hold <= now { pick = i }
         var fresh: Frame?
-        if let p = pick { fresh = ring[p]; skipped += p; ring.removeFirst(p + 1); lastSent = fresh }
-        let repeatDue = now - lastSendAt >= 0.015
+        if let p = pick {
+            let f = ring[p]; fresh = f; skipped += p; ring.removeFirst(p + 1); lastSent = f
+            if lastFreshPTS > 0 { period = min(0.2, max(0.008, 0.9 * period + 0.1 * (f.pts - lastFreshPTS))) }
+            lastFreshPTS = f.pts; lastFreshAt = now
+        }
+        // a repeat fills a gap of the input (30 fps in = 60 out); none when the next picture is due within 8 ms; a
+        // stalled input keeps the 60 fps by repeats
+        let sinceFresh = now - lastFreshAt
+        let repeatDue = now - lastSendAt >= 0.016 && (now + 0.008 < lastFreshAt + period || sinceFresh > period * 1.5)
         let send = fresh ?? (repeatDue ? lastSent : nil)
         lock.unlock()
         guard let f = send else { return }
@@ -425,6 +437,8 @@ final class VirtualCam {
             "fps": Self.r1(fpsUnique), "sendFps": Self.r1(fpsSend),
             "latencyMs": nn2(lat.map(Self.r1)), "latencyWithoutHoldMs": nn2(lat.map { Self.r1($0 - holdMs) }),
             "processingMs": nn2(Self.median(processing).map(Self.r1)),
+            "arrivalMs": nn2(Self.median(arrivals).map(Self.r1)), "convertMs": nn2(Self.median(converts).map(Self.r1)),
+            "inputPeriodMs": Self.r1(period * 1000),
             "delay": ["videoDelayMs": videoDelayMs, "trimMs": trimMs, "extraDelayMs": extraMs, "requestedMs": Self.r1(requestedMs),
                       "appliedMs": Self.r1(holdMs), "maxHoldMs": capMs, "capped": capped,
                       "formula": "sync.videoDelayMs.<video id> + virtualcam.trimMs + extraDelayMs (audio path, v33)"] as [String: Any],
