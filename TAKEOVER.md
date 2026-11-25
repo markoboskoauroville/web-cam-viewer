@@ -1,5 +1,21 @@
 # TAKEOVER: Webcam Recorder (Mantra)
 
+**State 25.11.2026: v28 = messages that no longer apply go away by themselves.** Marko: "So I asked you to open Sony Imaging
+Edge remote, and it is opened up. It's already here. It's online, but the message is kind of persistent on the screen."
+- **The stuck text** was the centre label "Opening Sony Imaging Edge Remote…" (Snap.swift): said when S opened Remote, never
+  cleared after the snap succeeded. SnapRemote now owns its texts (tell/clear, Viewer's unsay clears only if the label still
+  shows ours) and clears them when it snaps, unsnaps, Remote quits or Remote is opened from elsewhere; a Remote window that
+  appears late (>20 s) is still snapped for 5 min. Proven on the installed v28: /snap with Remote closed showed the text at
+  1 s, snapped at 1-2 s, text gone (screenshots v28_opening / v28_snapped in the session's scratchpad).
+- **The Sony verdict** "The camera's Wi-Fi remote is open." + "read failed: Connection reset by peer" was false: a VPN 0/1
+  route accepted every TCP connect (LESSONS 40). Ports count only when ping/ARP or SSDP answers; stage 4 says "answered, but
+  not by the camera". Remote holding the cable: "Camera online, controlled by Imaging Edge Remote (USB). TAKE CONTROL closes
+  Imaging Edge Remote and controls it from here." A 3 s cable watcher re-measures on any USB owner change and every 60 s
+  (LESSONS 41). Proven: Remote quit → "Camera online on USB (ILCE-7M5), free. CONNECT controls it from here." in about 4 s;
+  Remote reopened (it reconnected to the camera by itself) → the calm Remote text again.
+- **Not verified:** the Wi-Fi road on the Mantra router (the Mac was on 10.200.102.x behind a VPN); camera control itself.
+
+
 **State 21.11.2026: v23 → v27 = the sound is really in the take; the Sony diagnosis is honest; USB control road; updater.**
 Marko: "It doesn't record the sound first ... It's on Wi-Fi, and the application says it's not on Wi-Fi. Please make it connect
 to the camera and remotely control it." (word for word in momentaryupdates.md). Skill: ~/.claude/skills/webcam-recorder.

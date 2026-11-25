@@ -123,3 +123,17 @@
 38. **A new overlay element must be checked against every other overlay (v27).** The v26 sound banner sat on the Sony
     overlay's CONNECT row when both were open. Capture the window with every overlay open together; the banner now pushes
     the Sony overlay down by its own wrapped height.
+39. **Every centre text needs an owner that takes it away (v28, 25.11.2026).** S said "Opening Sony Imaging Edge Remote…"
+    and attach() succeeded, but nothing cleared the text: it stayed over the picture for the whole session while Remote was
+    open and snapped. A class that puts text on the shared message label now remembers it (tell) and clears only its own
+    text (unsay compares the label) when the state it describes ends: snapped, unsnapped, Remote quit or opened elsewhere.
+40. **An open TCP port is not a camera behind a VPN (v28).** A VPN with a 0/1 route (utun99) accepted every TCP connect, so
+    15740 and 22 at 192.168.1.100 (and at any address, e.g. .123) "opened" while the Mac was on 10.200.102.x and the camera
+    answered no ping and had no ARP entry. The verdict said "The camera's Wi-Fi remote is open" and the connect died with
+    "read failed: Connection reset by peer". Trust a port only when the host itself answers (ping/ARP) or SSDP; a control
+    probe on a random address (`nc -z 192.168.1.123 15740`) shows the fake at once.
+41. **A verdict measured once goes stale (v28).** The Sony diagnosis of 08:05 stood at 08:20 after Imaging Edge Remote had
+    changed. While not connected, the cable is now read every 3 s (IOKit only); a change of the Sony's USB owner (Remote
+    opened or closed) re-measures every stage at once (seen: about 4 s after Remote quit and after it reopened), and a
+    non-idle verdict older than 60 s is measured again. Remote holding the camera is the normal state: say it calmly
+    ("Camera online, controlled by Imaging Edge Remote (USB)"), never as an error.

@@ -1,6 +1,7 @@
 # Web Cam Viewer (Mantra): the requests, word for word
 
 **25.11.2026 (v28):** Marko: *"Please debug my application, a webcam recorder. Right now, it's opened. So I asked you to open Sony Imaging Edge remote, and it is opened up. It's already here. It's online, but the message is kind of persistent on the screen."*
+  Status 25.11.2026: done in v28 (the stuck text was "Opening Sony Imaging Edge Remote…"; stale and false Sony verdicts fixed; see TAKEOVER).
 
 **1.11.2026:** Marko: *"now we're going to develop a different kind of monitor, a new application in my Start menu. We call it Web Cam Viewer (Mantra). Web Cam Viewer is a simple client for macOS, of course in Swift, which simply shows anything that can be viewed on any webcam. It just displays the picture. It has only a drop-down menu at the top, an X for closing, and at the top I just choose any webcam the system sees, and you show me the picture. Very simple"*
 
