@@ -4,6 +4,7 @@ import AVFoundation
 private final class WaveformView: NSView {
     var samples: [Float] = [] { didSet { needsDisplay = true } }
     var progress = 0.0 { didSet { needsDisplay = true } }
+    var marker: Double? { didSet { needsDisplay = true } }
     var label = ""
     var color: NSColor = .systemGreen
     var seek: ((Double) -> Void)?
@@ -44,6 +45,17 @@ private final class WaveformView: NSView {
         let x = bounds.width * progress
         NSColor.systemRed.setFill()
         NSRect(x: x - 1, y: 0, width: 2, height: bounds.height).fill()
+        if let marker {
+            let mx = bounds.width * min(1, max(0, marker))
+            color.setFill()
+            let arrow = NSBezierPath()
+            arrow.move(to: NSPoint(x: mx - 4, y: 0))
+            arrow.line(to: NSPoint(x: mx + 4, y: 0))
+            arrow.line(to: NSPoint(x: mx, y: 6))
+            arrow.close()
+            arrow.fill()
+            NSRect(x: mx - 1, y: 6, width: 2, height: bounds.height - 6).fill()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -59,6 +71,7 @@ final class ReviewPlayer: NSView {
     var onError: ((String) -> Void)?
     var onAutoAlign: (() -> Void)?
     var onLTCSync: (() -> Void)?
+    var onApplyMarks: ((Double) -> Void)?
 
     private let videoHost = NSView()
     private let videoLayer = AVPlayerLayer()
@@ -68,6 +81,11 @@ final class ReviewPlayer: NSView {
     private let close = NSButton()
     private let autoAlign = NSButton()
     private let phoneTC = NSButton()
+    private let markAudio = NSButton()
+    private let markVideo = NSButton()
+    private let applyMarks = NSButton()
+    private var audioMarker: Double?
+    private var videoMarker: Double?
     private let readout = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private var player: AVPlayer?
@@ -114,7 +132,16 @@ final class ReviewPlayer: NSView {
         autoAlign.setAccessibilityIdentifier("auto-align")
         Self.button(phoneTC, "PHONE TC / LTC", self, #selector(phoneTCTapped))
         phoneTC.setAccessibilityIdentifier("phone-tc-ltc")
-        for b in [play, close, autoAlign, phoneTC] {
+        Self.button(markAudio, "MARK AUDIO", self, #selector(markAudioTapped))
+        markAudio.setAccessibilityIdentifier("mark-audio")
+        Self.button(markVideo, "MARK VIDEO", self, #selector(markVideoTapped))
+        markVideo.setAccessibilityIdentifier("mark-video")
+        Self.button(applyMarks, "APPLY MARKS", self, #selector(applyMarksTapped))
+        applyMarks.setAccessibilityIdentifier("apply-marks")
+        markAudio.isEnabled = false
+        markVideo.isEnabled = false
+        applyMarks.isEnabled = false
+        for b in [play, close, autoAlign, phoneTC, markAudio, markVideo, applyMarks] {
             b.translatesAutoresizingMaskIntoConstraints = false
             addSubview(b)
         }
@@ -149,11 +176,17 @@ final class ReviewPlayer: NSView {
             referenceWave.bottomAnchor.constraint(equalTo: play.topAnchor, constant: -8),
 
             play.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            play.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
+            play.bottomAnchor.constraint(equalTo: markAudio.topAnchor, constant: -4),
             autoAlign.leadingAnchor.constraint(equalTo: play.trailingAnchor, constant: 8),
             autoAlign.centerYAnchor.constraint(equalTo: play.centerYAnchor),
             phoneTC.leadingAnchor.constraint(equalTo: autoAlign.trailingAnchor, constant: 8),
             phoneTC.centerYAnchor.constraint(equalTo: play.centerYAnchor),
+            markAudio.leadingAnchor.constraint(equalTo: play.leadingAnchor),
+            markAudio.topAnchor.constraint(equalTo: play.bottomAnchor, constant: 4),
+            markVideo.leadingAnchor.constraint(equalTo: markAudio.trailingAnchor, constant: 8),
+            markVideo.centerYAnchor.constraint(equalTo: markAudio.centerYAnchor),
+            applyMarks.leadingAnchor.constraint(equalTo: markVideo.trailingAnchor, constant: 8),
+            applyMarks.centerYAnchor.constraint(equalTo: markAudio.centerYAnchor),
             readout.centerXAnchor.constraint(equalTo: centerXAnchor),
             readout.centerYAnchor.constraint(equalTo: play.centerYAnchor),
             close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
@@ -161,6 +194,7 @@ final class ReviewPlayer: NSView {
             status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            markAudio.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
         ])
         updateReadout()
     }
@@ -193,8 +227,13 @@ final class ReviewPlayer: NSView {
         source = url
         self.fps = max(1, fps)
         duration = 0
+        audioMarker = nil
+        videoMarker = nil
         selectedWave.samples = []
         referenceWave.samples = []
+        selectedWave.marker = nil
+        referenceWave.marker = nil
+        applyMarks.isEnabled = false
         status.stringValue = "Loading \(url.lastPathComponent)…"
         status.textColor = NSColor.white.withAlphaComponent(0.75)
         autoAlign.isEnabled = false
@@ -225,6 +264,8 @@ final class ReviewPlayer: NSView {
                     self.referenceWave.samples = wave1
                     self.autoAlign.isEnabled = !wave1.isEmpty
                     self.phoneTC.isEnabled = true
+                    self.markAudio.isEnabled = true
+                    self.markVideo.isEnabled = true
                     self.status.stringValue = wave1.isEmpty
                         ? "No camera scratch track: AUTO ALIGN needs two recorded audio tracks."
                         : "←/→ one frame · Shift ←/→ ten frames · Space play/pause · click either waveform to seek"
@@ -317,6 +358,52 @@ final class ReviewPlayer: NSView {
         onLTCSync?()
     }
 
+    @objc private func markAudioTapped() {
+        audioMarker = currentSeconds()
+        updateMarkers()
+    }
+
+    @objc private func markVideoTapped() {
+        videoMarker = currentSeconds()
+        updateMarkers()
+    }
+
+    @objc private func applyMarksTapped() {
+        guard let audioMarker, let videoMarker else { return }
+        let shiftMs = SyncAnalyzer.manualMarkerShiftMs(videoSeconds: videoMarker, audioSeconds: audioMarker)
+        onApplyMarks?(shiftMs)
+        setAutoAlignStatus(String(format: "Applied manual markers: %+.3f ms shift to the selected audio.", shiftMs))
+    }
+
+    private func currentSeconds() -> Double {
+        let seconds = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+        return seconds.isFinite ? max(0, seconds) : 0
+    }
+
+    private func updateMarkers() {
+        player?.pause()
+        selectedWave.marker = audioMarker.flatMap { duration > 0 ? $0 / duration : nil }
+        referenceWave.marker = videoMarker.flatMap { duration > 0 ? $0 / duration : nil }
+        applyMarks.isEnabled = audioMarker != nil && videoMarker != nil
+        if let audioMarker, let videoMarker {
+            let difference = SyncAnalyzer.manualMarkerShiftMs(
+                videoSeconds: videoMarker,
+                audioSeconds: audioMarker
+            )
+            status.stringValue = String(
+                format: "AUDIO %.3f s · VIDEO %.3f s · correction %+.3f ms (%+.2f frames, %+.0f samples at 48 kHz)",
+                audioMarker, videoMarker, difference, difference * fps / 1000, difference * 48
+            )
+            status.textColor = .systemGreen
+        } else if let audioMarker {
+            status.stringValue = String(format: "Audio mark set at %.3f s. Find the matching picture frame and press MARK VIDEO.", audioMarker)
+            status.textColor = NSColor.systemOrange
+        } else if let videoMarker {
+            status.stringValue = String(format: "Video mark set at %.3f s. Find the sound onset and press MARK AUDIO.", videoMarker)
+            status.textColor = NSColor.systemOrange
+        }
+    }
+
     private func closePlayback() {
         generation = UUID()
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
@@ -348,6 +435,8 @@ final class ReviewPlayer: NSView {
         let progress = duration > 0 ? min(1, safe / duration) : 0
         selectedWave.progress = progress
         referenceWave.progress = progress
+        selectedWave.marker = audioMarker.flatMap { duration > 0 ? $0 / duration : nil }
+        referenceWave.marker = videoMarker.flatMap { duration > 0 ? $0 / duration : nil }
         updatePlayButton()
     }
 }

@@ -20,7 +20,7 @@ import AVFoundation
 // v31 (25.11.2026): GAIN per sound input (on the device when it has its own volume, else digital), AUTO GAIN (the Sound
 // Recorder's Gain Assistant, peaks to -12 dBFS), takes with 32-bit float sound (Gain.swift, GainPanel.swift).
 // v22 (21.11.2026): the current Picture Profile / lock key marked by a green border and title, also in an inactive window.
-let VERSION = 41
+let VERSION = 42
 let NAME = "Webcam Recorder (Mantra)"
 let APP_NAME = NAME   // v23: the updater kit (MANTRA_MANIFEST kits/mac-updater) names the app by APP_NAME
 
@@ -100,6 +100,17 @@ enum Main {
                 exit(0)
             } catch {
                 print("LTC/OCR: FAIL \(error.localizedDescription)")
+                exit(1)
+            }
+        }
+        if let i = a.firstIndex(of: "--audio-file-selftest"), i + 1 < a.count {
+            do {
+                let result = try SyncAnalyzer.alignAudio(url: URL(fileURLWithPath: a[i + 1]))
+                print(String(format: "AUTO ALIGN: PASS correction %.3f ms, %d windows, quality %.3f, spread %.3f ms",
+                             result.correctionMs, result.windows, result.quality, result.spreadMs))
+                exit(0)
+            } catch {
+                print("AUTO ALIGN: FAIL \(error.localizedDescription)")
                 exit(1)
             }
         }

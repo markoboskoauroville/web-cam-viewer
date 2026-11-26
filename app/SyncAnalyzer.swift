@@ -67,7 +67,7 @@ enum SyncAnalyzer {
         }
         let correction = median(corrections)
         let spread = corrections.max()! - corrections.min()!
-        let quality = median(qualities)
+        let quality = min(100, median(qualities))
         guard spread <= 2.0, abs(correction) <= 1000, quality >= 5 else {
             throw AlignmentError.lowConfidence
         }
@@ -84,7 +84,9 @@ enum SyncAnalyzer {
     static func alignLTC(url: URL) throws -> AlignmentResult {
         let duration = try mediaDuration(url)
         let audioLength = min(6.0, duration)
-        let samples = try pcm(url: url, track: 0, start: 0, length: audioLength)
+        let trackCount = try audioTrackCount(url)
+        let ltcTrack = trackCount >= 2 ? 1 : 0
+        let samples = try pcm(url: url, track: ltcTrack, start: 0, length: audioLength)
         var visual: [(seconds: Double, milliseconds: Int)] = []
         let first = min(0.4, max(0, duration / 4))
         let end = min(duration - 0.1, max(first, 5.0))
@@ -128,6 +130,10 @@ enum SyncAnalyzer {
         )
     }
 
+    static func manualMarkerShiftMs(videoSeconds: Double, audioSeconds: Double) -> Double {
+        ((videoSeconds - audioSeconds) * 1000 * 1_000).rounded() / 1_000
+    }
+
     static func mathSelfTest() -> Bool {
         let n = 4096
         let delay = 137
@@ -148,7 +154,10 @@ enum SyncAnalyzer {
         let decoded = decodeLTC(ltc)
         let ltcOK = decoded?.milliseconds == target && abs((decoded?.seconds ?? 0) - 123.0 / Double(sampleRate)) < 0.001
         print("LTC decode: \(ltcOK ? "PASS" : "FAIL")")
-        return fftOK && ltcOK
+        let marks = manualMarkerShiftMs(videoSeconds: 2.0, audioSeconds: 2.333333333333)
+        let marksOK = abs(marks + 333.333) < 0.001
+        print("manual marker math: \(marksOK ? "PASS" : "FAIL") (\(marks) ms)")
+        return fftOK && ltcOK && marksOK
     }
 
     private static func rms(_ values: [Float]) -> Float {

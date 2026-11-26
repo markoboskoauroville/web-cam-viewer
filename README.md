@@ -18,7 +18,9 @@ Page: **https://webcamrecorder.markobosko.org** (download, donation bowl), card 
 - **PLAY** beside Record opens the last completed take in the local player. It has two waveform rows (selected audio and
   the camera reference), click-to-seek, Space play/pause, Left/Right one-frame stepping and Shift+Left/Right ten frames.
   **AUTO ALIGN** measures the residual between both audio tracks; **PHONE TC / LTC** reads 25 fps LTC from audio and OCRs
-  the phone timecode from the picture. Both refuse low-confidence measurements and apply the measured delta per input.
+  the phone timecode from the picture. **MARK AUDIO / MARK VIDEO / APPLY MARKS** provides the manual frame-and-waveform
+  method and shows the delta in milliseconds, frames and samples. Every method refuses low-confidence measurements and
+  applies the measured delta per input.
 - **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mkv`: H.264 at the live camera resolution and delivered frame rate, AAC
   48 kHz, with the real-time start time code in the file metadata; `REC  HH:MM:SS:FF` is shown while it records.
   LOW / MID / HIGH scale from 10 / 25 / 50 Mb/s at 1920×1080 30 FPS, by pixels × delivered FPS. The quality key is next

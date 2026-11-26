@@ -568,6 +568,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         reviewPlayer.onError = { [weak self] in self?.say($0) }
         reviewPlayer.onAutoAlign = { [weak self] in self?.autoAlignReview() }
         reviewPlayer.onLTCSync = { [weak self] in self?.alignPhoneTimecode() }
+        reviewPlayer.onApplyMarks = { [weak self] correction in self?.applyReviewMarks(correction) }
         content.addSubview(reviewPlayer)
 
         content.addSubview(bar)   // last: over the picture
@@ -1555,6 +1556,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     private func alignPhoneTimecode() {
         analyzeReview(ltc: true)
+    }
+
+    private func applyReviewMarks(_ correctionMs: Double) {
+        guard let chosen = chosenSync, !chosen.reference else {
+            reviewPlayer.setAutoAlignStatus("Choose a non-reference sound input before applying marks.", error: true)
+            return
+        }
+        Sync.setAudio(chosen.uid, chosen.ms + correctionMs)
     }
 
     private func analyzeReview(ltc: Bool) {
