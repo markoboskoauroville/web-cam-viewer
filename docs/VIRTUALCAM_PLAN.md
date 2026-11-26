@@ -49,7 +49,7 @@ route A, PatchWork hosted as an Audio Unit).
 | Audio devices | `system_profiler SPAudioDataType` | RØDE NT1 5th Gen (1 in), UGREEN 15389 (2 in), External Microphone, MacBook Pro Microphone, BlackHole 2ch (2/2), NDI Audio (2 in, 6 out), Iriun Webcam Audio, ZoomAudioDevice (2/2), ADAM D3V, BenQ, headphones. |
 | PatchWork AU | Component Info.plist | `aumf 1kh1 Bcau` "Blue Cat Audio: BC PatchWork", x86_64+arm64 (docs/PATCHWORK_CONTROL.md). |
 | Webcam Recorder signature | `codesign -dvv` | "Mantra Apps", flags 0x0: **no hardened runtime**, so it may load the PatchWork AU in process. |
-| Repo visibility | `gh repo view` | web-cam-viewer is PUBLIC. |
+| Repo visibility | `gh repo view` | webcam-recorder is PUBLIC. |
 
 ## 3. What OBS's source teaches (obs-studio main 0c790bd, 21.11.2026, plugins/mac-virtualcam, libobs)
 

@@ -12,7 +12,7 @@ import AppKit
 
 enum Updater {
     struct Config {
-        static let repo = "markoboskoauroville/web-cam-viewer"
+        static let repo = "markoboskoauroville/webcam-recorder"
         static let asset = "app.zip"
         static let sign = "Mantra Apps"
     }

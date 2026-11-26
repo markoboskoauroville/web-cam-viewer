@@ -15,6 +15,10 @@ Page: **https://webcamrecorder.markobosko.org** (download, donation bowl), card 
 - **Two VU hairlines** down the left edge, left and right channel, 2 pt each and touching (v4), the meter of Mantra Manual
   Camera: dB from −54, −6 and −18 marked, green / amber / red, white peak; a mono input lights both.
 - **The record key** is a white ring; under the mouse it fills with a see-through red (v3), pressed it turns solid red.
+- **PLAY** beside Record opens the last completed take in the local player. It has two waveform rows (selected audio and
+  the camera reference), click-to-seek, Space play/pause, Left/Right one-frame stepping and Shift+Left/Right ten frames.
+  **AUTO ALIGN** measures the residual between both audio tracks; **PHONE TC / LTC** reads 25 fps LTC from audio and OCRs
+  the phone timecode from the picture. Both refuse low-confidence measurements and apply the measured delta per input.
 - **● records** `~/Movies/mb_YYYY-MM-DD_HH-MM-SS.mkv`: H.264 at the live camera resolution and delivered frame rate, AAC
   48 kHz, with the real-time start time code in the file metadata; `REC  HH:MM:SS:FF` is shown while it records.
   LOW / MID / HIGH scale from 10 / 25 / 50 Mb/s at 1920×1080 30 FPS, by pixels × delivered FPS. The quality key is next
@@ -44,6 +48,7 @@ Cloudflare Pages. Repository secrets: `CLOUDFLARE_API_TOKEN` (Marko pasted it), 
 ## Test flags
 
     WebCamViewer --list                 # the cameras, in the menu's order
+    WebCamViewer --sync-math-selftest   # verifies sample-lag correlation and the 25 fps LTC decoder
     curl http://127.0.0.1:8867/status    # includes feed, actualBitrate and remainingTime
     curl http://127.0.0.1:8867/capture   # verified formats, FPS and supported controls
     open -n -g "/Applications/Webcam Recorder (Mantra).app" --args --quiet

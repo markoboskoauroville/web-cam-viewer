@@ -35,6 +35,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let recKey = RecordKey()
+    private let playKey = NSButton()
+    private let reviewPlayer = ReviewPlayer(frame: .zero)
     private let qualityKey = NSButton()
     private let snapKey = NSButton()
     private let folderKey = NSButton()
@@ -84,6 +86,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private let fullKey = FullKey()
     private var overlays: [NSView] = []
     private var meterTop: NSLayoutConstraint!
+    private var reviewTop: NSLayoutConstraint!
     private let permissions = NSButton()
     private let message = NSTextField(labelWithString: "")
     // v24: the take's sound warning under the bar, red, wrapping with the width: the bar's statistics key is clipped in a
@@ -105,7 +108,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var interrupted = false             // the last take ended because the camera or the sound went away
     private let overlay = ChoiceOverlay()
     private var recStart: Date?
-    private var lastTake: String?
+    private var lastTake: String? = UserDefaults.standard.string(forKey: "lastTake")
     private var currentTake: String?
     private var lastActualBitrate: Int? = UserDefaults.standard.object(forKey: "lastActualBitrate").flatMap { ($0 as? NSNumber)?.intValue }
     private var lastActualQuality: RecordQuality? = UserDefaults.standard.string(forKey: "lastActualQuality")
@@ -323,6 +326,20 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         recKey.widthAnchor.constraint(equalToConstant: 30).isActive = true
         recKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
+        playKey.translatesAutoresizingMaskIntoConstraints = false
+        playKey.isBordered = false
+        playKey.imagePosition = .imageOnly
+        playKey.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Play last take")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .bold))
+        playKey.contentTintColor = .white
+        playKey.target = self
+        playKey.action = #selector(playLastTake)
+        playKey.setAccessibilityIdentifier("play-last")
+        playKey.setAccessibilityTitle("Play last take")
+        playKey.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        playKey.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        playKey.toolTip = "Play the last recorded take (Space: play/pause, arrows: frame step)"
+
         startPictureClick()
         qualityKey.translatesAutoresizingMaskIntoConstraints = false
         qualityKey.isBordered = false
@@ -450,7 +467,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         autoGain.set = { [weak self] db in self?.setGain(db, fromAuto: true) }
         updateGainKey()
 
-        let group = NSStackView(views: [popup, micPopup, gainKey, syncKey, recKey, qualityKey, feedStats])
+        let group = NSStackView(views: [popup, micPopup, gainKey, syncKey, recKey, playKey, qualityKey, feedStats])
         group.detachesHiddenViews = true
         group.orientation = .horizontal
         group.spacing = 10
@@ -546,6 +563,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         feedStats.setAccessibilityIdentifier("video-stats")
         feedStats.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        reviewPlayer.isHidden = true
+        reviewPlayer.onClose = { [weak self] in self?.updatePlayKey() }
+        reviewPlayer.onError = { [weak self] in self?.say($0) }
+        reviewPlayer.onAutoAlign = { [weak self] in self?.autoAlignReview() }
+        reviewPlayer.onLTCSync = { [weak self] in self?.alignPhoneTimecode() }
+        content.addSubview(reviewPlayer)
+
         content.addSubview(bar)   // last: over the picture
         overlay.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(overlay, positioned: .below, relativeTo: bar)   // the bar stays usable over it
@@ -574,6 +598,13 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             gainPanel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
             gainPanel.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -8)])
         let gwide = gainPanel.widthAnchor.constraint(equalToConstant: 460); gwide.priority = .defaultHigh; gwide.isActive = true
+        reviewTop = reviewPlayer.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.barHeight)
+        NSLayoutConstraint.activate([
+            reviewTop,
+            reviewPlayer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            reviewPlayer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            reviewPlayer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: content.topAnchor), overlay.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             overlay.leadingAnchor.constraint(equalTo: content.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: content.trailingAnchor)])
@@ -586,6 +617,8 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             guard let self, e.window === self.window else { return e }
             let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
             if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "f" { self.toggleFull(); return nil }
+            if self.reviewPlayer.handleKey(e) { return nil }
+            if e.keyCode == 53, self.reviewPlayer.isReviewing { self.reviewPlayer.closeReview(); return nil }
             if e.keyCode == 53, !self.gainPanel.isHidden { self.setGainPanel(false); return nil }   // v31: the GAIN box
             if e.keyCode == 53, !self.syncPanel.isHidden { self.setSync(false); return nil }   // v30: the SYNC box first
             if e.keyCode == 53, !self.sonyPanel.isHidden { if !self.sonyPanel.clearSearch() { self.setSony(false) }; return nil }   // Escape: the search first (v39), then hides the Sony controls
@@ -679,6 +712,7 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
         if !window.setFrameUsingName("WebCamViewer") || test { place() }
         window.setFrameAutosaveName("WebCamViewer")
+        updatePlayKey()
     }
 
     // first start (and tests): on the MacBook Pro's own screen, never the BenQ
@@ -798,12 +832,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if !gainPanel.isHidden { setGainPanel(false) }
         sonyTop.constant = 0
         meterTop.constant = 0   // the meters the whole height
+        reviewTop.constant = 0
         NSCursor.setHiddenUntilMouseMoves(true)
     }
     @objc private func leftFull() {
         overlays.forEach { $0.isHidden = false }
         sonyTop.constant = Self.barHeight
         meterTop.constant = Self.barHeight
+        reviewTop.constant = Self.barHeight
     }
 
     /// stops a running take cleanly (the file is closed), then the session
@@ -1472,6 +1508,85 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     @objc func toggleRecord() { isRecording ? stopRecording() : startRecording() }
 
+    private func newestTake() -> URL? {
+        if let path = lastTake, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: Recorder.folder, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+        )) ?? []
+        return files.filter { $0.pathExtension.lowercased() == "mkv" && $0.lastPathComponent.hasPrefix("mb_") }
+            .sorted {
+                ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0)
+                    > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0)
+            }
+            .first
+    }
+
+    @objc private func playLastTake() {
+        guard !isRecording, let url = newestTake() else {
+            say(isRecording ? "Stop the take before opening the player." : "No recording to play yet.")
+            return
+        }
+        lastTake = url.path
+        UserDefaults.standard.set(url.path, forKey: "lastTake")
+        say("")
+        if !overlay.isHidden { overlay.close() }
+        if !syncPanel.isHidden { setSync(false) }
+        if !gainPanel.isHidden { setGainPanel(false) }
+        setSony(false, connect: false)
+        reviewPlayer.open(url: url, fps: Double(recordingFPS))
+        updatePlayKey()
+    }
+
+    private func updatePlayKey() {
+        let available = !isRecording && newestTake() != nil
+        playKey.isEnabled = available
+        playKey.alphaValue = available ? 1 : 0.35
+        playKey.toolTip = isRecording ? "Stop recording to review a take" : (available
+            ? "Play the last recorded take (Space: play/pause, arrows: frame step)"
+            : "Record a take first")
+        playKey.setAccessibilityValue(reviewPlayer.isReviewing ? "review open" : (available ? "available" : "unavailable"))
+    }
+
+    private func autoAlignReview() {
+        analyzeReview(ltc: false)
+    }
+
+    private func alignPhoneTimecode() {
+        analyzeReview(ltc: true)
+    }
+
+    private func analyzeReview(ltc: Bool) {
+        guard let url = reviewPlayer.sourceURL else { return }
+        guard let chosen = chosenSync, !chosen.reference else {
+            reviewPlayer.setAutoAlignStatus("Choose a non-reference sound input before AUTO ALIGN.", error: true)
+            return
+        }
+        reviewPlayer.setAutoAlignStatus(ltc
+            ? "Measuring phone LTC against the filmed timecode…"
+            : "Measuring selected audio against the camera reference…")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try ltc ? SyncAnalyzer.alignLTC(url: url) : SyncAnalyzer.alignAudio(url: url)
+                let value = chosen.ms + result.correctionMs
+                DispatchQueue.main.async {
+                    Sync.setAudio(chosen.uid, value)
+                    let samples = Int((result.correctionMs * self.syncRate(self.currentMic) / 1000).rounded())
+                    self.reviewPlayer.setAutoAlignStatus(
+                        "Aligned \(chosen.name): \(result.correctionMs >= 0 ? "+" : "")"
+                            + String(format: "%.3f ms (%+d samples), %d windows, quality %.1f, spread %.2f ms",
+                                     result.correctionMs, samples, result.windows, result.quality, result.spreadMs)
+                    )
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.reviewPlayer.setAutoAlignStatus("AUTO ALIGN: \(error.localizedDescription)", error: true)
+                }
+            }
+        }
+    }
+
     @objc private func toggleQuality() {
         guard !isRecording else { return }
         let all = RecordQuality.allCases
@@ -1573,9 +1688,11 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
     private func recordingStarted(fps: Int32) {
+        if reviewPlayer.isReviewing { reviewPlayer.closeReview() }
         recKey.recording = true
         recKey.toolTip = "Stop recording"
         qualityKey.isEnabled = false
+        updatePlayKey()
         timecode.isHidden = false
         showTimecode(fps)
         tcTimer = Timer.scheduledTimer(withTimeInterval: 1 / Double(fps) / 2, repeats: true) { _ in self.showTimecode(fps) }
@@ -1632,12 +1749,14 @@ final class Viewer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let r else { done?(nil); return }
         r.finish { r in DispatchQueue.main.async {
             self.lastTake = r.url.path; self.currentTake = nil
+            UserDefaults.standard.set(r.url.path, forKey: "lastTake")
             self.lastActualQuality = r.quality
             self.lastActualBitrate = r.actualBitrate
             UserDefaults.standard.set(r.actualBitrate, forKey: "lastActualBitrate")
             UserDefaults.standard.set(r.quality.rawValue, forKey: "lastActualQuality")
             if let f = r.failed { self.say("The take failed:\n\(f)") }
             self.updateQualityKey()
+            self.updatePlayKey()
             done?(r)
         } }
     }
